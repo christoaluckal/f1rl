@@ -1,0 +1,4 @@
+<launch>
+<rosparam command="load" file="$(find f1rl)/params/core.yaml"/>
+<node name="car_core" pkg="f1rl" type="core.py" output="screen" />
+</launch>
