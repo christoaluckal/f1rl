@@ -1,4 +1,5 @@
 track_file: "tracks/IMS_centerline.csv"
 drive_topic: "/car_1/command"
 odom_topic: "/car_1/odom"
+reset_topic: "/car_1/reset"
 rate: 50
