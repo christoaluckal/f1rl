@@ -207,7 +207,7 @@ class CoreCarEnv():
             done=True
             reward-=100
 
-        reward += (closest_spline_t-prev_spline_t)*100
+        reward += (closest_spline_t-prev_spline_t)*self.track_length
 
         return state,reward[0],done
         
@@ -272,8 +272,6 @@ if __name__ == "__main__":
                         next_state,reward,done = core.step(action_idx)
 
                         experience_buffer.append((current_state,action_idx,reward,next_state,done))
-
-
 
                         online_network = trainer.train(online_network,target_network,experience_buffer,discount_rate,BUFFER_SAMPLE,rate,device)
 
