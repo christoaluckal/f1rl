@@ -54,10 +54,12 @@ class CoreCarEnv():
         y_idx = 1
         self.global_path,self.track_length,self.x_spline,self.y_spline = pathgen.get_spline_path(csv_f,x_idx,y_idx)
 
-        speeds = np.arange(0,10,0.5)
-        turns = np.arange(-0.4,0.41,0.05)
+        speeds = np.arange(1,4.1,0.2)
+        turns = np.arange(-0.3,0.31,0.01)
 
         self.action_map = {}
+        self.trajectory = []
+        self.trajectory = np.array(self.trajectory)
         counter = 0
         for s in speeds:
             for t in turns:
@@ -65,6 +67,8 @@ class CoreCarEnv():
                 counter+=1
 
         self.action_count = len(self.action_map.keys())
+
+        self.timesteps = 0
         
         
 
@@ -120,7 +124,9 @@ class CoreCarEnv():
 
     def reset(self):
         counter = 0
-        while(counter<10):
+        self.timesteps = 0
+        self.trajectory = np.array([])
+        while(counter<2):
             pose = Pose()
             self.reset_pub.publish(pose)
             self.rate.sleep()
@@ -163,6 +169,7 @@ class CoreCarEnv():
 
 
     def step(self,idx):
+        # print(self.trajectory.shape)
         reward = 0
         done = False
         prev_state = core.vehicle_state.get_state()[0]
@@ -178,19 +185,21 @@ class CoreCarEnv():
 
         current_state = core.vehicle_state.get_state()[0]
         closest_spline_t = core.closest_spline_param(distance_to_spline,current_state[0],current_state[1],core.x_spline,core.y_spline)
-        spline_x, spline_y = core.x_spline(closest_spline_t), core.y_spline(closest_spline_t)
+        spline_x, spline_y = core.x_spline(closest_spline_t[0]), core.y_spline(closest_spline_t[0])
 
         closest_spline_point = np.array([spline_x,spline_y])
 
+        self.trajectory = np.append(self.trajectory,closest_spline_point,axis=0)
+
         state = current_state
-        spline_params = np.arange(closest_spline_t,closest_spline_t+2.1,0.4)
+        spline_params = np.arange(closest_spline_t[0],closest_spline_t[0]+2.1,0.4)
         for t in spline_params:
             state.append(current_state[0]-self.x_spline(t))
             state.append(current_state[1]-self.y_spline(t))
 
         state = np.array(state)
 
-        if core.euclidean_dist(current_state[0:2],closest_spline_point)>1:
+        if core.euclidean_dist(current_state[0:2],closest_spline_point)>3:
             print("Off Track")
             done=True
             reward-=100
@@ -201,15 +210,24 @@ class CoreCarEnv():
             reward+=100
 
         current_rot = core.vehicle_state.get_state()[1]
+
         
-        if math.isclose(current_rot[1],-1,abs_tol=0.1):
-            print("Flipped")
-            done=True
-            reward-=100
+        # if math.isclose(current_rot[1],-1,abs_tol=0.1):
+        #     print("Flipped")
+        #     done=True
+        #     reward-=100
 
-        reward += (closest_spline_t-prev_spline_t)*self.track_length
+        # if self.euclidean_dist(current_state[0:2],prev_state[0:2])<1e-3 and self.timesteps>200:
+        #     print("Stuck")
+        #     done=True
+        #     reward-=100
 
-        return state,reward[0],done
+        self.timesteps+=1
+        move_dist = self.euclidean_dist(current_state[0:2],prev_state[0:2])
+        # print(f"Move Dist:{move_dist}")
+        reward += move_dist*10 - 1e-3*self.timesteps
+
+        return state,reward,done
         
 
 
@@ -235,6 +253,9 @@ if __name__ == "__main__":
 
     n_states = core.get_state_count()
 
+    episodes = []
+    reward_list = []
+
 
     online_network = Network(n_states,core.action_count,archs).to(device)
     target_network = Network(n_states,core.action_count,archs).to(device)
@@ -247,42 +268,62 @@ if __name__ == "__main__":
     trainer = NaiveDQN()
 
 
+
     rospy.on_shutdown(shutdown_hook)
     
     while not rospy.is_shutdown():
-        for i in range(epochs):
+        try:
+            for i in range(epochs):
 
-            try:
-                print("Resetting Vehicle State")
-                state = core.reset()
-                rospy.sleep(1)
-                done=False
-                start = time.time()
-                ep_reward=0
-                poses = []
-                while not done:
-                    current_state = state
-                    if time.time()-start>max_time:
-                        done=True
-                        reward-=100
-                        break
-                    else:
-                        action_idx,action_type = policy(state,online_network,core.action_count,epsilon,device)
+                try:
+                    # print("Resetting Vehicle State")
+                    state = core.reset()
+                    rospy.sleep(1)
+                    done=False
+                    start = time.time()
+                    ep_reward=0
+                    greeds = 0
+                    exploits = 0
+                    poses = []
+                    while not done:
+                        current_state = state
+                        if time.time()-start>max_time:
+                            done=True
+                            reward-=100
+                            break
+                        else:
+                            action_idx,action_type = policy(state,online_network,core.action_count,epsilon,device)
 
-                        next_state,reward,done = core.step(action_idx)
+                            if action_type==0:
+                                greeds+=1
+                            else:
+                                exploits+=1
 
-                        experience_buffer.append((current_state,action_idx,reward,next_state,done))
+                            next_state,reward,done = core.step(action_idx)
 
-                        online_network = trainer.train(online_network,target_network,experience_buffer,discount_rate,BUFFER_SAMPLE,rate,device)
+                            experience_buffer.append((current_state,action_idx,reward,next_state,done))
 
-                        state = next_state
-                        ep_reward+=reward
+                            online_network = trainer.train(online_network,target_network,experience_buffer,discount_rate,BUFFER_SAMPLE,rate,device)
 
-                epsilon *= decay_rate
-                print(f"Epoch:{i} Reward:{ep_reward} Epsilon:{epsilon}")
-                    
+                            state = next_state
+                            ep_reward+=reward
 
-
-            except rospy.exceptions.ROSInterruptException:
+                    epsilon *= decay_rate
+                    episodes.append(i)
+                    reward_list.append(ep_reward)
+                    print(f"Epoch:{i} {greeds}/{exploits} Reward:{ep_reward} Epsilon:{epsilon}")
                 
-                break
+                    with open(os.path.join(rp.get_path('f1rl'),'src/dqn_reward.txt'),'a') as f:
+                        f.write(f"{i}\t{ep_reward}\n")
+                        
+
+
+                except (KeyboardInterrupt,rospy.ROSInterruptException):
+                    raise Exception("Shutting Down")
+                
+        except Exception as e:
+            break
+
+
+
+    
