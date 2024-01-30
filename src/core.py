@@ -30,6 +30,7 @@ from networks.policies import EpsilonGreedy
 from networks.dqn import NaiveDQN
 from networks.nns import General_Network as Network
 import torch
+from subprocess import Popen,call
 
 experience_buffer = deque(maxlen=int(1e6))
 BUFFER_SAMPLE = 256
@@ -199,17 +200,11 @@ class CoreCarEnv():
 
         state = np.array(state)
 
-        if core.euclidean_dist(current_state[0:2],closest_spline_point)>3:
-            print("Off Track")
-            done=True
-            reward-=100
+        spline_dist = self.euclidean_dist(current_state[0:2],closest_spline_point)
 
-        if closest_spline_t>core.track_length-5:
-            print("Finished Track")
-            done=True
-            reward+=100
+        
 
-        current_rot = core.vehicle_state.get_state()[1]
+        current_rot = self.vehicle_state.get_state()[1]
 
         
         # if math.isclose(current_rot[1],-1,abs_tol=0.1):
@@ -224,8 +219,24 @@ class CoreCarEnv():
 
         self.timesteps+=1
         move_dist = self.euclidean_dist(current_state[0:2],prev_state[0:2])
+
         # print(f"Move Dist:{move_dist}")
-        reward += move_dist*10 - 1e-3*self.timesteps
+        if current_state[3]<0.25:
+            reward-=1
+        
+        else:
+
+            reward += move_dist*current_state[3]*10
+
+            if spline_dist>3:
+                print("Off Track")
+                done=True
+                reward=-1
+
+            if closest_spline_t>60:
+                print("Finished Track")
+                done=True
+                reward+=10
 
         return state,reward,done
         
@@ -254,7 +265,8 @@ if __name__ == "__main__":
     n_states = core.get_state_count()
 
     episodes = []
-    reward_list = []
+    reward_list = np.array([])
+    mean_list = np.array([])
 
 
     online_network = Network(n_states,core.action_count,archs).to(device)
@@ -262,19 +274,35 @@ if __name__ == "__main__":
 
     target_network.load_state_dict(online_network.state_dict())
 
+    # online_network.load_state_dict(torch.load(os.path.join(rp.get_path('f1rl'),'src/online_network.pth')))
+    # target_network.load_state_dict(torch.load(os.path.join(rp.get_path('f1rl'),'src/target_network.pth')))
+    best_reward = -1e6
+
     discount_rate = 0.99
     rate = 1e-3
     policy = EpsilonGreedy.policy
     trainer = NaiveDQN()
 
-
-
+    C = 20
+    T = 20
+    
+    current_C = 0
+    current_T = 0
     rospy.on_shutdown(shutdown_hook)
+
+    eval_mode = False
+
+    call(["bash",os.path.join(rp.get_path('f1rl'),'src/macro.sh')])
+    print("Macro Called")
+    time.sleep(1)
     
     while not rospy.is_shutdown():
         try:
             for i in range(epochs):
-
+                if i%50==0:
+                    eval_mode = True
+                else:
+                    eval_mode = False
                 try:
                     # print("Resetting Vehicle State")
                     state = core.reset()
@@ -292,7 +320,10 @@ if __name__ == "__main__":
                             reward-=100
                             break
                         else:
-                            action_idx,action_type = policy(state,online_network,core.action_count,epsilon,device)
+                            if eval_mode:
+                                action_idx,action_type = policy(state,online_network,core.action_count,-1,device)
+                            else:
+                                action_idx,action_type = policy(state,online_network,core.action_count,epsilon,device)
 
                             if action_type==0:
                                 greeds+=1
@@ -303,25 +334,62 @@ if __name__ == "__main__":
 
                             experience_buffer.append((current_state,action_idx,reward,next_state,done))
 
-                            online_network = trainer.train(online_network,target_network,experience_buffer,discount_rate,BUFFER_SAMPLE,rate,device)
-
+                            if current_T==T:
+                                online_network = trainer.train(online_network,target_network,experience_buffer,discount_rate,BUFFER_SAMPLE,rate,device)
+                                current_T=0
+                            else:
+                                current_T+=1
                             state = next_state
                             ep_reward+=reward
 
                     epsilon *= decay_rate
                     episodes.append(i)
-                    reward_list.append(ep_reward)
+                    reward_list = np.append(reward_list,ep_reward)
+
+                    if eval_mode:
+                        print(f"Eval Reward:{ep_reward}")
                     print(f"Epoch:{i} {greeds}/{exploits} Reward:{ep_reward} Epsilon:{epsilon}")
                 
                     with open(os.path.join(rp.get_path('f1rl'),'src/dqn_reward.txt'),'a') as f:
                         f.write(f"{i}\t{ep_reward}\n")
                         
+                    if current_C==C:
+                        target_network.load_state_dict(online_network.state_dict())
+                        current_C=0
+                    else:
+                        current_C+=1
 
+                    if ep_reward>0 or i%50==49:
+                        torch.save(online_network.state_dict(),os.path.join(rp.get_path('f1rl'),'src/online_network.pth'))
+                        torch.save(target_network.state_dict(),os.path.join(rp.get_path('f1rl'),'src/target_network.pth'))
+                        print("Saved Network")
 
-                except (KeyboardInterrupt,rospy.ROSInterruptException):
-                    raise Exception("Shutting Down")
+                    
+
+                        with open(os.path.join(rp.get_path('f1rl'),'src/best_reward.txt'),'a') as f:
+                            f.write(f"{i}\t{ep_reward}\n")
+
+                    means = np.mean(reward_list[-10:]) if len(reward_list)>10 else None
+                    print(f"Mean Reward:{means} Best Reward:{best_reward}")
+
+                    if (means is not None and means>-300 and means<-200) or i%25==24:
+                        call(["bash",os.path.join(rp.get_path('f1rl'),'src/macro.sh')])
+                        print("Macro Called")
+                        time.sleep(1)
+
+                    if (means is not None) and (means>best_reward):
+                        print(f"Best Mean Reward:{means}")
+                        torch.save(online_network.state_dict(),os.path.join(rp.get_path('f1rl'),'src/online_network_best.pth'))
+                        torch.save(target_network.state_dict(),os.path.join(rp.get_path('f1rl'),'src/target_network_best.pth'))
+                        print("Saved Best Network")
+                        best_reward = means
+
+                except (KeyboardInterrupt,rospy.ROSInterruptException) as e:
+                    print(e)
+                    # raise Exception("Shutting Down")
                 
         except Exception as e:
+            print(e)
             break
 
 
