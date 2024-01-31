@@ -2,5 +2,5 @@ track_file: "tracks/IMS_centerline.csv"
 drive_topic: "/car_1/command"
 odom_topic: "/car_1/odom"
 reset_topic: "/car_1/reset"
-is_lab: true
+is_lab: false
 rate: 10

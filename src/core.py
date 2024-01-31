@@ -32,20 +32,85 @@ from networks.nns import General_Network as Network
 import torch
 from subprocess import Popen,call
 from torch.utils.tensorboard import SummaryWriter
+from visualization_msgs.msg import Marker
+from geometry_msgs.msg import Point
+from tf.transformations import quaternion_from_euler
+import pickle
 
 experience_buffer = deque(maxlen=int(1e6))
 BUFFER_SAMPLE = 256
+reset_flag = False
 
 def distance_to_spline(t,current_x,current_y,x_spline,y_spline):
     spline_x, spline_y = x_spline(t), y_spline(t)
     return math.sqrt((spline_x - current_x) ** 2 + (spline_y - current_y) ** 2)
 
+def rviz_marker(msg,msg_type):
+    if msg_type == 0:
+        marker = Marker()
+        marker.header.frame_id = "map"
+        marker.header.stamp = rospy.Time.now()
+        marker.ns = "waypoints"
+        marker.id = 0
+        marker.type = Marker.POINTS
+        marker.action = Marker.ADD
+        marker.pose.orientation.w = 1.0
+        marker.scale.x = 0.1
+        marker.color.r = 1.0
+        marker.color.g = 1.0
+        marker.color.a = 1.0
+        for p in msg:
+            point = Point()
+            point.x = p[0]
+            point.y = p[1]
+            point.z = 0
+            marker.points.append(point)
+    elif msg_type == 1:
+        marker = Marker()
+        marker.header.frame_id = "map"
+        marker.header.stamp = rospy.Time.now()
+        marker.ns = "ego"
+        marker.id = 0
+        marker.type = Marker.POINTS
+        marker.action = Marker.ADD
+        marker.pose.orientation.w = 1.0
+        marker.scale.x = 0.5
+        marker.color.g = 1.0
+        marker.color.a = 1.0
+        for p in msg:
+            point = Point()
+            point.x = p[0]
+            point.y = p[1]
+            point.z = 0
+            marker.points.append(point)
+
+    elif msg_type == 2:
+        marker = Marker()
+        marker.header.frame_id = "map"
+        marker.header.stamp = rospy.Time.now()
+        marker.ns = "reference"
+        marker.id = 0
+        marker.type = Marker.POINTS
+        marker.action = Marker.ADD
+        marker.pose.orientation.w = 1.0
+        marker.scale.x = 0.1
+        marker.color.b = 1.0
+        marker.color.a = 1.0
+        for p in msg:
+            point = Point()
+            point.x = p[0]
+            point.y = p[1]
+            point.z = 0
+            marker.points.append(point)
+
+    return marker
+
 class CoreCarEnv():
     def __init__(self) -> None:
         rospy.init_node('car_core',anonymous=True)
         self.drive_pub = rospy.Publisher(rosparam.get_param("drive_topic"), AckermannDrive, queue_size=1)
-        self.raceline_pub = rospy.Publisher('visualization_markers',Marker,queue_size=1)
-        self.spline_marker_pub = rospy.Publisher('visualization_markers',Marker,queue_size=1)
+        self.rviz_pub = rospy.Publisher('visualization_markers',Marker,queue_size=1)
+        # self.spline_marker_pub = rospy.Publisher('visualization_markers',Marker,queue_size=1)
         self.reset_pub = rospy.Publisher(rosparam.get_param("reset_topic"),Pose,queue_size=1)
         self.vehicle_state = self.VehicleState()
         self.rate = rospy.Rate(rospy.get_param("rate",24))
@@ -61,7 +126,6 @@ class CoreCarEnv():
 
         self.action_map = {}
         self.trajectory = []
-        self.trajectory = np.array(self.trajectory)
         counter = 0
         for s in speeds:
             for t in turns:
@@ -118,6 +182,7 @@ class CoreCarEnv():
 
     def euclidean_dist(self,p1,p2):
         return math.sqrt((p1[0]-p2[0])**2+(p1[1]-p2[1])**2)
+    
 
     def closest_spline_param(self,fn,current_x,current_y,x_spline,y_spline,best_t=0):
         res = minimize(fn,x0=best_t, args=(current_x, current_y,x_spline,y_spline))
@@ -127,9 +192,35 @@ class CoreCarEnv():
     def reset(self):
         counter = 0
         self.timesteps = 0
-        self.trajectory = np.array([])
+        self.trajectory = []
+        random_reset = rospy.get_param("random_reset",False)
+        if random_reset:
+            frac = 0.2
+            rand_point = np.random.randint(0,int(self.global_path.shape[0]*frac))
+            next_point = rand_point+1 if rand_point<self.global_path.shape[0]-1 else 0
+
+            x1,y1 = self.global_path[rand_point,0],self.global_path[rand_point,1]
+
+            yaw = math.atan2(self.global_path[next_point,1]-y1,self.global_path[next_point,0]-x1)
+
+            print(f"Resetting to {x1},{y1},{yaw}")
+
+            quat = quaternion_from_euler(0,0,yaw)
+        else:
+            x1,y1 = 0,0
+            yaw = np.random.uniform(-np.pi/4,np.pi/4)
+            quat = quaternion_from_euler(0,0,yaw)
+
         while(counter<2):
             pose = Pose()
+            pose.position.x = x1
+            pose.position.y = y1
+            pose.position.z = 0
+            pose.orientation.x = quat[0]
+            pose.orientation.y = quat[1]
+            pose.orientation.z = quat[2]
+            pose.orientation.w = quat[3]
+
             self.reset_pub.publish(pose)
             self.rate.sleep()
             counter+=1
@@ -191,57 +282,108 @@ class CoreCarEnv():
 
         closest_spline_point = np.array([spline_x,spline_y])
 
-        self.trajectory = np.append(self.trajectory,closest_spline_point,axis=0)
+        self.trajectory.append([spline_x,spline_y])
 
         state = current_state
         spline_params = np.arange(closest_spline_t[0],closest_spline_t[0]+2.1,0.4)
+
+        p = []
+
         for t in spline_params:
-            state.append(current_state[0]-self.x_spline(t))
-            state.append(current_state[1]-self.y_spline(t))
+            lx = current_state[0]-self.x_spline(t)
+            ly = current_state[1]-self.y_spline(t)
+            state.append(lx)
+            state.append(ly)
+            
+            p.append([self.x_spline(t),self.y_spline(t)])
+
+        marker = rviz_marker([[current_state[0],current_state[1]]],1)
+        self.rviz_pub.publish(marker)
+
+        marker = rviz_marker(p,2)
+        self.rviz_pub.publish(marker)
 
         state = np.array(state)
 
         spline_dist = self.euclidean_dist(current_state[0:2],closest_spline_point)
 
-        
-
-        current_rot = self.vehicle_state.get_state()[1]
-
-        
-        # if math.isclose(current_rot[1],-1,abs_tol=0.1):
-        #     print("Flipped")
-        #     done=True
-        #     reward-=100
-
-        # if self.euclidean_dist(current_state[0:2],prev_state[0:2])<1e-3 and self.timesteps>200:
-        #     print("Stuck")
-        #     done=True
-        #     reward-=100
 
         self.timesteps+=1
         # move_dist = self.euclidean_dist(current_state[0:2],prev_state[0:2])
         move_dist = (closest_spline_t[0]-prev_spline_t[0])
 
         # print(f"Move Dist:{move_dist}")
-        if current_state[3]<0.25:
-            reward-=1
+        if current_state[3]<0.1:
+            reward=-1
+
         
         else:
 
-            reward += move_dist*current_state[3]*10
+            reward += move_dist*current_state[3]
 
             if spline_dist>3:
                 print("Off Track")
                 done=True
-                reward=-1
+                reward=-10
 
             if closest_spline_t>60:
                 print("Finished Track")
                 done=True
-                reward+=10
+                reward+=100
 
-        return state,reward,done
+            if len(self.trajectory)>100:
+                temp = np.array(self.trajectory)
+                if abs(temp[-100,0]-temp[-1,0])<0.1 and abs(temp[-100,1]-temp[-1,1])<0.1:
+                    print("Step-Stalled")
+                    done=True
+                    reward-=100
+
+        return state,reward,done,[current_state[0],current_state[1]]
         
+def build_logging():
+    root_dir = os.path.join(rp.get_path('f1rl'),'src')
+
+    if not os.path.exists(os.path.join(root_dir,'runs')):
+        print("Creating runs directory")
+        os.mkdir(os.path.join(root_dir,'runs'))
+    
+    if not os.path.exists(os.path.join(root_dir,'models')):
+        print("Creating models directory")
+        os.mkdir(os.path.join(root_dir,'models'))
+
+    if not os.path.exists(os.path.join(root_dir,'tensorboard')):
+        print("Creating tensorboard directory")
+        os.mkdir(os.path.join(root_dir,'tensorboard'))
+
+def create_files(experiment_name):
+    root_dir = os.path.join(rp.get_path('f1rl'),'src')
+
+    try:
+        os.remove(os.path.join(root_dir,'runs',f'{experiment_name}_dqn_reward.txt'))
+        with open(os.path.join(root_dir,'runs',f'{experiment_name}_dqn_reward.txt'),'w+') as f:
+            f.write("Epoch\tReward\n")
+    except:
+        print(f"Creating {experiment_name}_dqn_reward.txt")
+        with open(os.path.join(root_dir,'runs',f'{experiment_name}_dqn_reward.txt'),'w+') as f:
+            f.write("Epoch\tReward\n")
+
+    try:
+        os.remove(os.path.join(root_dir,'runs',f'{experiment_name}_best_reward.txt'))
+        with open(os.path.join(root_dir,'runs',f'{experiment_name}_best_reward.txt'),'w+') as f:
+            f.write("Epoch\tReward\n")
+    except:
+        print(f"Creating {experiment_name}_best_reward.txt")
+        with open(os.path.join(root_dir,'runs',f'{experiment_name}_best_reward.txt'),'w+') as f:
+            f.write("Epoch\tReward\n")
+
+    try:
+        os.remove(os.path.join(root_dir,'runs',f'{experiment_name}_trajectories.pkl'))
+        with open(os.path.join(root_dir,'runs',f'{experiment_name}_trajectories.pkl'),'wb') as f:
+            pickle.dump({},f)
+    except:
+        print(f"Creating {experiment_name}_trajectories.pkl")
+        with open(os.path.join(root_dir,'runs',f'{experiment_name}_trajectories.pkl'),'wb') as f:
+            pickle.dump({},f)
 
 
 
@@ -265,7 +407,7 @@ if __name__ == "__main__":
         done=False
         ref_list = np.array(core.global_path[:,0:2])
         max_time = 100
-        epochs = 3000
+        epochs = 10000
         max_epsilon = 1
         min_epsilon = 0.01
         decay_rate = (min_epsilon/max_epsilon)**(1/epochs)
@@ -273,7 +415,16 @@ if __name__ == "__main__":
         
         archs = a
 
-        experiment_name = f"experiment_{exp_counter}"
+        architecture_str = ""
+        for i in range(len(archs)):
+            architecture_str+=str(archs[i])
+            if i!=len(archs)-1:
+                architecture_str+="_"
+
+        build_logging()
+        
+
+        experiment_name = f"arch_{architecture_str}"
 
         writer = SummaryWriter(os.path.join(rp.get_path('f1rl'),'src/tensorboard',experiment_name))
 
@@ -305,19 +456,25 @@ if __name__ == "__main__":
 
         eval_mode = False
 
-        call(["bash",macro_file])
-        print("Macro Called")
-        time.sleep(1)
+
+        trajectory = {}
+        np.save(os.path.join(rp.get_path('f1rl'),f'src/runs/path.npy'),core.global_path[:,0:2])
+
+        create_files(experiment_name)
+
         
         while not rospy.is_shutdown():
+            path_array = np.array(core.global_path[:,0:2])
+            m = rviz_marker(path_array,0)
+            core.rviz_pub.publish(m)
             try:
                 for i in range(epochs):
+                    
                     if i%50==0:
                         eval_mode = True
                     else:
                         eval_mode = False
                     try:
-                        # print("Resetting Vehicle State")
                         state = core.reset()
                         rospy.sleep(1)
                         done=False
@@ -326,6 +483,8 @@ if __name__ == "__main__":
                         greeds = 0
                         exploits = 0
                         poses = []
+                        current_rewards = np.array([])
+                        current_trajectory = []
                         while not done:
                             current_state = state
                             if time.time()-start>max_time:
@@ -343,7 +502,9 @@ if __name__ == "__main__":
                                 else:
                                     exploits+=1
 
-                                next_state,reward,done = core.step(action_idx)
+                                next_state,reward,done, pos = core.step(action_idx)
+
+                                current_rewards = np.append(current_rewards,reward)
 
                                 experience_buffer.append((current_state,action_idx,reward,next_state,done))
 
@@ -354,6 +515,16 @@ if __name__ == "__main__":
                                     current_T+=1
                                 state = next_state
                                 ep_reward+=reward
+
+                                current_trajectory.append(pos)
+
+                                if ep_reward<-100:
+                                    call(["bash",macro_file])
+                                    print("Macro Called")
+                                    time.sleep(1)
+                                    break
+
+                        trajectory[i] = np.array(current_trajectory)
 
                         writer.add_scalar('Reward',ep_reward,i)
                         if eval_mode:
@@ -367,7 +538,7 @@ if __name__ == "__main__":
                             print(f"Eval Reward:{ep_reward}")
                         print(f"Epoch:{i} {greeds}/{exploits} Reward:{ep_reward} Epsilon:{epsilon}")
                     
-                        with open(os.path.join(rp.get_path('f1rl'),'src/dqn_reward.txt'),'a') as f:
+                        with open(os.path.join(rp.get_path('f1rl'),f'src/runs/{experiment_name}_dqn_reward.txt'),'a') as f:
                             f.write(f"{i}\t{ep_reward}\n")
                             
                         if current_C==C:
@@ -377,29 +548,31 @@ if __name__ == "__main__":
                             current_C+=1
 
                         if ep_reward>0 or i%50==49:
-                            torch.save(online_network.state_dict(),os.path.join(rp.get_path('f1rl'),'src/online_network.pth'))
-                            torch.save(target_network.state_dict(),os.path.join(rp.get_path('f1rl'),'src/target_network.pth'))
+                            torch.save(online_network.state_dict(),os.path.join(rp.get_path('f1rl'),f'src/models/{experiment_name}online_network.pth'))
+                            torch.save(target_network.state_dict(),os.path.join(rp.get_path('f1rl'),f'src/models/{experiment_name}_target_network.pth'))
                             print("Saved Network")
 
                         
-
-                            with open(os.path.join(rp.get_path('f1rl'),'src/best_reward.txt'),'a') as f:
+                            with open(os.path.join(rp.get_path('f1rl'),f'src/runs/{experiment_name}_best_reward.txt'),'a+') as f:
                                 f.write(f"{i}\t{ep_reward}\n")
 
                         means = np.mean(reward_list[-10:]) if len(reward_list)>10 else None
-                        print(f"Mean Reward:{means} Best Reward:{best_reward}")
 
-                        if (means is not None and means>-300 and means<-200) or i%25==24:
+                        if i%10==9:
                             call(["bash",macro_file])
                             print("Macro Called")
                             time.sleep(1)
+                            continue
 
                         if (means is not None) and (means>best_reward):
                             print(f"Best Mean Reward:{means}")
-                            torch.save(online_network.state_dict(),os.path.join(rp.get_path('f1rl'),'src/online_network_best.pth'))
-                            torch.save(target_network.state_dict(),os.path.join(rp.get_path('f1rl'),'src/target_network_best.pth'))
+                            torch.save(online_network.state_dict(),os.path.join(rp.get_path('f1rl'),f'src/models/{experiment_name}_online_network_best.pth'))
+                            torch.save(target_network.state_dict(),os.path.join(rp.get_path('f1rl'),f'src/models/{experiment_name}_target_network_best.pth'))
                             print("Saved Best Network")
                             best_reward = means
+
+                        with open(os.path.join(rp.get_path('f1rl'),f'src/runs/{experiment_name}_trajectories.pkl'),'wb') as f:
+                            pickle.dump(trajectory,f)
 
                     except (KeyboardInterrupt,rospy.ROSInterruptException) as e:
                         print(e)

@@ -3,7 +3,7 @@ import sys
 
 file = open(sys.argv[1], "r")
 
-lines = file.readlines()
+lines = file.readlines()[1:]
 
 x = []
 y = []
