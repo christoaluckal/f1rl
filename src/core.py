@@ -36,6 +36,7 @@ from visualization_msgs.msg import Marker
 from geometry_msgs.msg import Point
 from tf.transformations import quaternion_from_euler
 import pickle
+import shutil
 
 experience_buffer = deque(maxlen=int(1e6))
 BUFFER_SAMPLE = 256
@@ -346,14 +347,27 @@ def build_logging():
     if not os.path.exists(os.path.join(root_dir,'runs')):
         print("Creating runs directory")
         os.mkdir(os.path.join(root_dir,'runs'))
+    else:
+        for f in os.listdir(os.path.join(root_dir,'runs')):
+            os.remove(os.path.join(root_dir,'runs',f))
+
     
     if not os.path.exists(os.path.join(root_dir,'models')):
         print("Creating models directory")
         os.mkdir(os.path.join(root_dir,'models'))
+    else:
+        for f in os.listdir(os.path.join(root_dir,'models')):
+            os.remove(os.path.join(root_dir,'models',f))
 
     if not os.path.exists(os.path.join(root_dir,'tensorboard')):
         print("Creating tensorboard directory")
         os.mkdir(os.path.join(root_dir,'tensorboard'))
+    else:
+        # delete all files and folders in tensorboard
+        for f in os.listdir(os.path.join(root_dir,'tensorboard')):
+            shutil.rmtree(os.path.join(root_dir,'tensorboard',f))
+
+
 
 def create_files(experiment_name):
     root_dir = os.path.join(rp.get_path('f1rl'),'src')
@@ -548,7 +562,7 @@ if __name__ == "__main__":
                             current_C+=1
 
                         if ep_reward>0 or i%50==49:
-                            torch.save(online_network.state_dict(),os.path.join(rp.get_path('f1rl'),f'src/models/{experiment_name}online_network.pth'))
+                            torch.save(online_network.state_dict(),os.path.join(rp.get_path('f1rl'),f'src/models/{experiment_name}_online_network.pth'))
                             torch.save(target_network.state_dict(),os.path.join(rp.get_path('f1rl'),f'src/models/{experiment_name}_target_network.pth'))
                             print("Saved Network")
 
