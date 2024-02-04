@@ -361,63 +361,73 @@ class CoreCarEnv():
 
         return state,reward,done,[current_state[0],current_state[1]]
         
-def build_logging():
+def build_logging(experiment_name):
     root_dir = os.path.join(rp.get_path('f1rl'),'src')
 
-    if not os.path.exists(os.path.join(root_dir,'runs')):
-        print("Creating runs directory")
-        os.mkdir(os.path.join(root_dir,'runs'))
+    if os.path.exists(os.path.join(root_dir,'runs')):
+        print("Runs Directory Exists")
     else:
-        for f in os.listdir(os.path.join(root_dir,'runs')):
-            os.remove(os.path.join(root_dir,'runs',f))
+        os.makedirs(os.path.join(root_dir,'runs'))
+
+    runs_dir = os.path.join(root_dir,'runs')
+
+    if os.path.exists(os.path.join(runs_dir,experiment_name)):
+        print(f"{experiment_name} Exists")
+        for f in os.listdir(os.path.join(runs_dir,experiment_name)):
+            os.remove(os.path.join(runs_dir,experiment_name,f))
+    else:
+        os.makedirs(os.path.join(runs_dir,experiment_name))
+
+    exp_dir = os.path.join(runs_dir,experiment_name)
+
+    if os.path.exists(os.path.join(exp_dir,'models')):
+        print("Models Directory Exists")
+        for f in os.listdir(os.path.join(exp_dir,'models')):
+            os.remove(os.path.join(exp_dir,'models',f))
+
+    else:
+        os.makedirs(os.path.join(exp_dir,'models'))
 
     
-    if not os.path.exists(os.path.join(root_dir,'models')):
-        print("Creating models directory")
-        os.mkdir(os.path.join(root_dir,'models'))
+    if os.path.exists(os.path.join(exp_dir,'logs')):
+        print("Logs Directory Exists")
+        for f in os.listdir(os.path.join(exp_dir,'logs')):
+            os.remove(os.path.join(exp_dir,'logs',f))
+
     else:
-        for f in os.listdir(os.path.join(root_dir,'models')):
-            os.remove(os.path.join(root_dir,'models',f))
+        os.makedirs(os.path.join(exp_dir,'logs'))
 
-    if not os.path.exists(os.path.join(root_dir,'tensorboard')):
-        print("Creating tensorboard directory")
-        os.mkdir(os.path.join(root_dir,'tensorboard'))
+
+    if os.path.exists(os.path.join(runs_dir,'tensorboard',experiment_name)):
+        print("Tensorboard Directory Exists")
+        for f in os.listdir(os.path.join(runs_dir,'tensorboard',experiment_name)):
+            os.remove(os.path.join(runs_dir,'tensorboard',experiment_name,f))
+
     else:
-        # delete all files and folders in tensorboard
-        for f in os.listdir(os.path.join(root_dir,'tensorboard')):
-            shutil.rmtree(os.path.join(root_dir,'tensorboard',f))
+        os.makedirs(os.path.join(runs_dir,'tensorboard',experiment_name))
+
+    
+    return exp_dir
+    
 
 
 
-def create_files(experiment_name):
-    root_dir = os.path.join(rp.get_path('f1rl'),'src')
+def create_files(experiment_path):
+    
+    with open(f"{experiment_path}_dqn_reward.txt",'w') as f:
+        f.write("Epoch\tReward\n")
 
-    try:
-        os.remove(os.path.join(root_dir,'runs',f'{experiment_name}_dqn_reward.txt'))
-        with open(os.path.join(root_dir,'runs',f'{experiment_name}_dqn_reward.txt'),'w+') as f:
-            f.write("Epoch\tReward\n")
-    except:
-        print(f"Creating {experiment_name}_dqn_reward.txt")
-        with open(os.path.join(root_dir,'runs',f'{experiment_name}_dqn_reward.txt'),'w+') as f:
-            f.write("Epoch\tReward\n")
+    with open(f"{experiment_path}_best_reward.txt",'w') as f:
+        f.write("Epoch\tReward\n")
 
-    try:
-        os.remove(os.path.join(root_dir,'runs',f'{experiment_name}_best_reward.txt'))
-        with open(os.path.join(root_dir,'runs',f'{experiment_name}_best_reward.txt'),'w+') as f:
-            f.write("Epoch\tReward\n")
-    except:
-        print(f"Creating {experiment_name}_best_reward.txt")
-        with open(os.path.join(root_dir,'runs',f'{experiment_name}_best_reward.txt'),'w+') as f:
-            f.write("Epoch\tReward\n")
+    with open(f"{experiment_path}_trajectories.pkl",'wb') as f:
+        pickle.dump({},f)
 
-    try:
-        os.remove(os.path.join(root_dir,'runs',f'{experiment_name}_trajectories.pkl'))
-        with open(os.path.join(root_dir,'runs',f'{experiment_name}_trajectories.pkl'),'wb') as f:
-            pickle.dump({},f)
-    except:
-        print(f"Creating {experiment_name}_trajectories.pkl")
-        with open(os.path.join(root_dir,'runs',f'{experiment_name}_trajectories.pkl'),'wb') as f:
-            pickle.dump({},f)
+    reward_path = f"{experiment_path}_dqn_reward.txt"
+    best_reward_path = f"{experiment_path}_best_reward.txt"
+    trajectory_path = f"{experiment_path}_trajectories.pkl"
+
+    return [reward_path,best_reward_path,trajectory_path]
 
 
 
@@ -429,7 +439,7 @@ def shutdown_hook():
 if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    architectures = [[256,256]]
+    architectures = [[256,256],[1],[2]]
     is_lab = rospy.get_param("is_lab",False)
     macro_file = os.path.join(rp.get_path('f1rl'),'src/macro.sh' if (not is_lab) else 'src/macro_lab.sh')
 
@@ -441,7 +451,7 @@ if __name__ == "__main__":
         done=False
         ref_list = np.array(core.global_path[:,0:2])
         max_time = 100
-        epochs = 10000
+        epochs = 2
         max_epsilon = 1
         min_epsilon = 0.01
         decay_rate = (min_epsilon/max_epsilon)**(1/epochs)
@@ -455,12 +465,12 @@ if __name__ == "__main__":
             if i!=len(archs)-1:
                 architecture_str+="_"
 
-        build_logging()
-        
-
         experiment_name = f"arch_{architecture_str}"
+        
+        exp_dir = build_logging(experiment_name)
 
-        writer = SummaryWriter(os.path.join(rp.get_path('f1rl'),'src/tensorboard',experiment_name))
+
+        writer = SummaryWriter(os.path.join(exp_dir,'tensorboard',experiment_name))
 
         n_states = core.get_state_count()
 
@@ -492,18 +502,24 @@ if __name__ == "__main__":
 
 
         trajectory = {}
-        np.save(os.path.join(rp.get_path('f1rl'),f'src/runs/path.npy'),core.global_path[:,0:2])
+        # np.save(os.path.join(rp.get_path('f1rl'),f'src/runs/path.npy'),core.global_path[:,0:2])
+        np.save(os.path.join(exp_dir,'logs','path.npy'),core.global_path[:,0:2])
 
-        create_files(experiment_name)
+        reward_path,best_path,traj_path = create_files(experiment_name)
+
+        print(f"Experiment:{experiment_name} Running")
+        print(f"Reward Path:{reward_path}")
+        print(f"Best Reward Path:{best_path}")
+        print(f"Trajectory Path:{traj_path}")
 
         # core.scene_reset()
         # time.sleep(1)
         # core.car_spawner()
-        call(["bash",macro_file])
-        print("Macro Called")
-        time.sleep(1)
-        
-        
+        # call(["bash",macro_file])
+        # print("Macro Called")
+        # time.sleep(1)
+
+
         while not rospy.is_shutdown():
             path_array = np.array(core.global_path[:,0:2])
             m = rviz_marker(path_array,0)
@@ -584,7 +600,7 @@ if __name__ == "__main__":
                         else:
                             print(f"Epoch:{i} {greeds}/{exploits} Reward:{ep_reward} Epsilon:{epsilon}")
                     
-                        with open(os.path.join(rp.get_path('f1rl'),f'src/runs/{experiment_name}_dqn_reward.txt'),'a') as f:
+                        with open(reward_path,'a') as f:
                             f.write(f"{i}\t{ep_reward}\n")
                             
                         if current_C==C:
@@ -593,7 +609,7 @@ if __name__ == "__main__":
                         else:
                             current_C+=1
                         
-                            with open(os.path.join(rp.get_path('f1rl'),f'src/runs/{experiment_name}_best_reward.txt'),'a+') as f:
+                            with open(best_path,'a+') as f:
                                 f.write(f"{i}\t{ep_reward}\n")
 
                         means = np.mean(reward_list[-10:]) if len(reward_list)>10 else None
@@ -606,13 +622,13 @@ if __name__ == "__main__":
 
                         if (means is not None) and (means>best_reward):
                             print(f"Best Mean Reward:{means}")
-                            torch.save(online_network.state_dict(),os.path.join(rp.get_path('f1rl'),f'src/models/{experiment_name}_online_network_best.pth'))
-                            torch.save(target_network.state_dict(),os.path.join(rp.get_path('f1rl'),f'src/models/{experiment_name}_target_network_best.pth'))
+                            torch.save(online_network.state_dict(),os.path.join(exp_dir,'models',f'{experiment_name}_online_network_best.pth'))
+                            torch.save(target_network.state_dict(),os.path.join(exp_dir,'models',f'{experiment_name}_target_network_best.pth'))
                             print("Saved Best Network")
                             best_reward = means
 
 
-                        with open(os.path.join(rp.get_path('f1rl'),f'src/runs/{experiment_name}_trajectories.pkl'),'wb') as f:
+                        with open(traj_path,'wb') as f:
                             pickle.dump(trajectory,f)
 
                     except (KeyboardInterrupt,rospy.ROSInterruptException) as e:
