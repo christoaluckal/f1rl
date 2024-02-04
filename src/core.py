@@ -374,7 +374,10 @@ def build_logging(experiment_name):
     if os.path.exists(os.path.join(runs_dir,experiment_name)):
         print(f"{experiment_name} Exists")
         for f in os.listdir(os.path.join(runs_dir,experiment_name)):
-            os.remove(os.path.join(runs_dir,experiment_name,f))
+            try:
+                os.remove(os.path.join(runs_dir,experiment_name,f))
+            except IsADirectoryError:
+                shutil.rmtree(os.path.join(runs_dir,experiment_name,f))
     else:
         os.makedirs(os.path.join(runs_dir,experiment_name))
 
@@ -383,7 +386,10 @@ def build_logging(experiment_name):
     if os.path.exists(os.path.join(exp_dir,'models')):
         print("Models Directory Exists")
         for f in os.listdir(os.path.join(exp_dir,'models')):
-            os.remove(os.path.join(exp_dir,'models',f))
+            try:
+                os.remove(os.path.join(exp_dir,'models',f))
+            except IsADirectoryError:
+                shutil.rmtree(os.path.join(exp_dir,'models',f))
 
     else:
         os.makedirs(os.path.join(exp_dir,'models'))
@@ -392,7 +398,10 @@ def build_logging(experiment_name):
     if os.path.exists(os.path.join(exp_dir,'logs')):
         print("Logs Directory Exists")
         for f in os.listdir(os.path.join(exp_dir,'logs')):
-            os.remove(os.path.join(exp_dir,'logs',f))
+            try:
+                os.remove(os.path.join(exp_dir,'logs',f))
+            except IsADirectoryError:
+                shutil.rmtree(os.path.join(exp_dir,'logs',f))
 
     else:
         os.makedirs(os.path.join(exp_dir,'logs'))
@@ -413,19 +422,19 @@ def build_logging(experiment_name):
 
 
 def create_files(experiment_path):
-    
-    with open(f"{experiment_path}_dqn_reward.txt",'w') as f:
+    print(f"Creating Files for {experiment_path}")
+    with open(f"{experiment_path}/logs/dqn_reward.txt",'w') as f:
         f.write("Epoch\tReward\n")
 
-    with open(f"{experiment_path}_best_reward.txt",'w') as f:
+    with open(f"{experiment_path}/logs/best_reward.txt",'w') as f:
         f.write("Epoch\tReward\n")
 
-    with open(f"{experiment_path}_trajectories.pkl",'wb') as f:
+    with open(f"{experiment_path}/logs/trajectories.pkl",'wb') as f:
         pickle.dump({},f)
 
-    reward_path = f"{experiment_path}_dqn_reward.txt"
-    best_reward_path = f"{experiment_path}_best_reward.txt"
-    trajectory_path = f"{experiment_path}_trajectories.pkl"
+    reward_path = f"{experiment_path}/logs/dqn_reward.txt"
+    best_reward_path = f"{experiment_path}/logs/best_reward.txt"
+    trajectory_path = f"{experiment_path}/logs/trajectories.pkl"
 
     return [reward_path,best_reward_path,trajectory_path]
 
@@ -505,12 +514,8 @@ if __name__ == "__main__":
         # np.save(os.path.join(rp.get_path('f1rl'),f'src/runs/path.npy'),core.global_path[:,0:2])
         np.save(os.path.join(exp_dir,'logs','path.npy'),core.global_path[:,0:2])
 
-        reward_path,best_path,traj_path = create_files(experiment_name)
+        reward_path,best_path,traj_path = create_files(exp_dir)
 
-        print(f"Experiment:{experiment_name} Running")
-        print(f"Reward Path:{reward_path}")
-        print(f"Best Reward Path:{best_path}")
-        print(f"Trajectory Path:{traj_path}")
 
         # core.scene_reset()
         # time.sleep(1)
@@ -529,7 +534,6 @@ if __name__ == "__main__":
             core.rviz_pub.publish(m)
             try:
                 for i in range(1,epochs+1):
-                    
                     if i%50==0:
                         eval_mode = True
                     else:
@@ -616,12 +620,6 @@ if __name__ == "__main__":
                                 f.write(f"{i}\t{ep_reward}\n")
 
                         means = np.mean(reward_list[-10:]) if len(reward_list)>10 else None
-
-                        # if i%10==9:
-                        #     call(["bash",macro_file])
-                        #     print("Macro Called")
-                        #     time.sleep(1)
-                        #     continue
 
                         if (means is not None) and (means>best_reward):
                             print(f"Best Mean Reward:{means}")
