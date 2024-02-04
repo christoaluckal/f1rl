@@ -116,6 +116,9 @@ class CoreCarEnv():
         self.vehicle_state = self.VehicleState()
         self.rate = rospy.Rate(rospy.get_param("rate",24))
 
+        self.scene_reset_pub = rospy.Publisher("/scenereset",Bool,queue_size=1)
+        self.car_spawner_pub = rospy.Publisher("/addcar",Bool,queue_size=1)
+
         track_file = os.path.join(rp.get_path('f1rl'),rosparam.get_param("track_file"))
         csv_f = track_file
         x_idx = 0
@@ -188,7 +191,16 @@ class CoreCarEnv():
     def closest_spline_param(self,fn,current_x,current_y,x_spline,y_spline,best_t=0):
         res = minimize(fn,x0=best_t, args=(current_x, current_y,x_spline,y_spline))
         return res.x
+    
+    def scene_reset(self):
+        print("Resetting Scene")
+        self.scene_reset_pub.publish(Bool(True))
+        self.rate.sleep()
 
+    def car_spawner(self):
+        # print("Spawning Car")
+        self.car_spawner_pub.publish(Bool(True))
+        self.rate.sleep()
 
     def reset(self):
         counter = 0
@@ -208,7 +220,7 @@ class CoreCarEnv():
 
             quat = quaternion_from_euler(0,0,yaw)
         else:
-            x1,y1 = 0,0
+            x1,y1 = 0,np.random.uniform(-0.5,0.5)
             yaw = np.random.uniform(-np.pi/4,np.pi/4)
             quat = quaternion_from_euler(0,0,yaw)
 
@@ -236,11 +248,11 @@ class CoreCarEnv():
         spline_t = self.closest_spline_param(distance_to_spline,current_state[0],current_state[1],self.x_spline,self.y_spline)
         
         state = current_state
-        spline_params = np.arange(spline_t,spline_t+2.1,0.4)
+        spline_params = np.arange(spline_t,spline_t+3.1,0.2)
 
         for t in spline_params:
-            state.append(current_state[0]-self.x_spline(t))
-            state.append(current_state[1]-self.y_spline(t))
+            state.append(self.x_spline(t)-current_state[0])
+            state.append(self.y_spline(t)-current_state[1])
 
         state = np.array(state)
         return state
@@ -250,13 +262,15 @@ class CoreCarEnv():
         spline_t = self.closest_spline_param(distance_to_spline,current_state[0],current_state[1],self.x_spline,self.y_spline)
 
         state = current_state
-        spline_params = np.arange(spline_t,spline_t+2.1,0.4)
+        spline_params = np.arange(spline_t,spline_t+3.1,0.2)
 
         for t in spline_params:
             # state.append(self.x_spline(t))
             # state.append(self.y_spline(t))
-            state.append(current_state[0]-self.x_spline(t))
-            state.append(current_state[1]-self.y_spline(t))
+            # state.append(current_state[0]-self.x_spline(t))
+            # state.append(current_state[1]-self.y_spline(t))
+            state.append(self.x_spline(t)-current_state[0])
+            state.append(self.y_spline(t)-current_state[1])
 
         state = np.array(state)
         return state.shape[0]
@@ -286,13 +300,13 @@ class CoreCarEnv():
         self.trajectory.append([spline_x,spline_y])
 
         state = current_state
-        spline_params = np.arange(closest_spline_t[0],closest_spline_t[0]+2.1,0.4)
+        spline_params = np.arange(closest_spline_t[0],closest_spline_t[0]+3.1,0.2)
 
         p = []
 
         for t in spline_params:
-            lx = current_state[0]-self.x_spline(t)
-            ly = current_state[1]-self.y_spline(t)
+            lx = self.x_spline(t)-current_state[0]
+            ly = self.y_spline(t)-current_state[1]
             state.append(lx)
             state.append(ly)
             
@@ -322,6 +336,12 @@ class CoreCarEnv():
 
             reward += move_dist*current_state[3]
 
+            if spline_dist<1:
+                reward += 5*1e-2
+
+            elif spline_dist<2:
+                reward += 2*1e-2
+
             if spline_dist>3:
                 print("Off Track")
                 done=True
@@ -337,7 +357,7 @@ class CoreCarEnv():
                 if abs(temp[-100,0]-temp[-1,0])<0.1 and abs(temp[-100,1]-temp[-1,1])<0.1:
                     print("Step-Stalled")
                     done=True
-                    reward-=100
+                    reward-=10
 
         return state,reward,done,[current_state[0],current_state[1]]
         
@@ -409,7 +429,7 @@ def shutdown_hook():
 if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    architectures = [[128,128],[128,128,128],[256,256],[256,256,256],[512,512],[512,512,512]]
+    architectures = [[256,256]]
     is_lab = rospy.get_param("is_lab",False)
     macro_file = os.path.join(rp.get_path('f1rl'),'src/macro.sh' if (not is_lab) else 'src/macro_lab.sh')
 
@@ -462,7 +482,7 @@ if __name__ == "__main__":
         trainer = NaiveDQN()
 
         C = 20
-        T = 20
+        T = 1000
         
         current_C = 0
         current_T = 0
@@ -476,13 +496,20 @@ if __name__ == "__main__":
 
         create_files(experiment_name)
 
+        # core.scene_reset()
+        # time.sleep(1)
+        # core.car_spawner()
+        call(["bash",macro_file])
+        print("Macro Called")
+        time.sleep(1)
+        
         
         while not rospy.is_shutdown():
             path_array = np.array(core.global_path[:,0:2])
             m = rviz_marker(path_array,0)
             core.rviz_pub.publish(m)
             try:
-                for i in range(epochs):
+                for i in range(1,epochs+1):
                     
                     if i%50==0:
                         eval_mode = True
@@ -519,8 +546,9 @@ if __name__ == "__main__":
                                 next_state,reward,done, pos = core.step(action_idx)
 
                                 current_rewards = np.append(current_rewards,reward)
-
-                                experience_buffer.append((current_state,action_idx,reward,next_state,done))
+                                
+                                if reward != -1:
+                                    experience_buffer.append((current_state,action_idx,reward,next_state,done))
 
                                 if current_T==T:
                                     online_network = trainer.train(online_network,target_network,experience_buffer,discount_rate,BUFFER_SAMPLE,rate,device)
@@ -536,6 +564,9 @@ if __name__ == "__main__":
                                     call(["bash",macro_file])
                                     print("Macro Called")
                                     time.sleep(1)
+                                    # core.scene_reset()
+                                    # time.sleep(1)
+                                    # core.car_spawner()
                                     break
 
                         trajectory[i] = np.array(current_trajectory)
@@ -550,7 +581,8 @@ if __name__ == "__main__":
 
                         if eval_mode:
                             print(f"Eval Reward:{ep_reward}")
-                        print(f"Epoch:{i} {greeds}/{exploits} Reward:{ep_reward} Epsilon:{epsilon}")
+                        else:
+                            print(f"Epoch:{i} {greeds}/{exploits} Reward:{ep_reward} Epsilon:{epsilon}")
                     
                         with open(os.path.join(rp.get_path('f1rl'),f'src/runs/{experiment_name}_dqn_reward.txt'),'a') as f:
                             f.write(f"{i}\t{ep_reward}\n")
@@ -560,23 +592,17 @@ if __name__ == "__main__":
                             current_C=0
                         else:
                             current_C+=1
-
-                        if ep_reward>0 or i%50==49:
-                            torch.save(online_network.state_dict(),os.path.join(rp.get_path('f1rl'),f'src/models/{experiment_name}_online_network.pth'))
-                            torch.save(target_network.state_dict(),os.path.join(rp.get_path('f1rl'),f'src/models/{experiment_name}_target_network.pth'))
-                            print("Saved Network")
-
                         
                             with open(os.path.join(rp.get_path('f1rl'),f'src/runs/{experiment_name}_best_reward.txt'),'a+') as f:
                                 f.write(f"{i}\t{ep_reward}\n")
 
                         means = np.mean(reward_list[-10:]) if len(reward_list)>10 else None
 
-                        if i%10==9:
-                            call(["bash",macro_file])
-                            print("Macro Called")
-                            time.sleep(1)
-                            continue
+                        # if i%10==9:
+                        #     call(["bash",macro_file])
+                        #     print("Macro Called")
+                        #     time.sleep(1)
+                        #     continue
 
                         if (means is not None) and (means>best_reward):
                             print(f"Best Mean Reward:{means}")
@@ -584,6 +610,7 @@ if __name__ == "__main__":
                             torch.save(target_network.state_dict(),os.path.join(rp.get_path('f1rl'),f'src/models/{experiment_name}_target_network_best.pth'))
                             print("Saved Best Network")
                             best_reward = means
+
 
                         with open(os.path.join(rp.get_path('f1rl'),f'src/runs/{experiment_name}_trajectories.pkl'),'wb') as f:
                             pickle.dump(trajectory,f)

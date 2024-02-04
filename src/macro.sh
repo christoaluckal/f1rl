@@ -1,17 +1,13 @@
 !/usr/bin/bash
 # while [1]; do
-xdotool mousemove 3075 287 click 1 
+xdotool mousemove 3115 257 click 1 
 sleep 1
-xdotool mousemove 3075 489 click 1
+xdotool mousemove 3124 514 click 1
 sleep 1
-xdotool mousemove 3075 285 click 1
+xdotool mousemove 3115 257 click 1
 sleep 1
-xdotool mousemove 3075 412 click 1
+xdotool mousemove 3151 414 click 1
 sleep 1
-# xdotool mousemove 3075 412 click 1
-# sleep 1
-# xdotool mousemove 3075 412 click 1
-# sleep 1
-xdotool mousemove 3186 284 click 1
-sleep 1
+xdotool mousemove 3300 257 click 1
+
     
