@@ -451,7 +451,7 @@ if __name__ == "__main__":
         done=False
         ref_list = np.array(core.global_path[:,0:2])
         max_time = 100
-        epochs = 2
+        epochs = 5
         max_epsilon = 1
         min_epsilon = 0.01
         decay_rate = (min_epsilon/max_epsilon)**(1/epochs)
@@ -470,7 +470,7 @@ if __name__ == "__main__":
         exp_dir = build_logging(experiment_name)
 
 
-        writer = SummaryWriter(os.path.join(exp_dir,'tensorboard',experiment_name))
+        writer = SummaryWriter(os.path.join(exp_dir,'../tensorboard',experiment_name))
 
         n_states = core.get_state_count()
 
@@ -519,6 +519,9 @@ if __name__ == "__main__":
         # print("Macro Called")
         # time.sleep(1)
 
+        epoch_counter = 0
+        rolling_eval_average = 0
+        rolling_reward_average = 0
 
         while not rospy.is_shutdown():
             path_array = np.array(core.global_path[:,0:2])
