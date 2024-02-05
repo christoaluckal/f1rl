@@ -337,17 +337,17 @@ class CoreCarEnv():
             reward += move_dist*current_state[3]
 
             if spline_dist<1:
-                reward += 5*1e-2
+                reward += 5*1e-1
 
             elif spline_dist<2:
-                reward += 2*1e-2
+                reward += 2*1e-1
 
             if spline_dist>3:
                 print("Off Track")
                 done=True
                 reward=-10
 
-            if closest_spline_t>60:
+            if closest_spline_t>100:
                 print("Finished Track")
                 done=True
                 reward+=100
@@ -448,7 +448,7 @@ def shutdown_hook():
 if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    architectures = [[256,256],[1],[2]]
+    architectures = [[128,128,128]]
     is_lab = rospy.get_param("is_lab",False)
     macro_file = os.path.join(rp.get_path('f1rl'),'src/macro.sh' if (not is_lab) else 'src/macro_lab.sh')
 
@@ -460,7 +460,7 @@ if __name__ == "__main__":
         done=False
         ref_list = np.array(core.global_path[:,0:2])
         max_time = 100
-        epochs = 5
+        epochs = 6000
         max_epsilon = 1
         min_epsilon = 0.01
         decay_rate = (min_epsilon/max_epsilon)**(1/epochs)
@@ -501,7 +501,7 @@ if __name__ == "__main__":
         trainer = NaiveDQN()
 
         C = 20
-        T = 1000
+        T = 200
         
         current_C = 0
         current_T = 0
@@ -520,24 +520,30 @@ if __name__ == "__main__":
         # core.scene_reset()
         # time.sleep(1)
         # core.car_spawner()
-        # call(["bash",macro_file])
-        # print("Macro Called")
-        # time.sleep(1)
+        call(["bash",macro_file])
+        print("Macro Called")
+        time.sleep(1)
 
         epoch_counter = 0
-        rolling_eval_average = 0
-        rolling_reward_average = 0
+        last_valid_epoch = 1
+        current_epoch = 1
+        invalid_flag = False
+
+        rolling_rewards = []
+        rolling_eval_rewards = []
 
         while not rospy.is_shutdown():
             path_array = np.array(core.global_path[:,0:2])
             m = rviz_marker(path_array,0)
             core.rviz_pub.publish(m)
             try:
-                for i in range(1,epochs+1):
-                    if i%50==0:
+                while current_epoch<epochs:
+                    
+                    if current_epoch%25==0:
                         eval_mode = True
                     else:
                         eval_mode = False
+                    
                     try:
                         state = core.reset()
                         rospy.sleep(1)
@@ -547,7 +553,6 @@ if __name__ == "__main__":
                         greeds = 0
                         exploits = 0
                         poses = []
-                        current_rewards = np.array([])
                         current_trajectory = []
                         while not done:
                             current_state = state
@@ -568,9 +573,8 @@ if __name__ == "__main__":
 
                                 next_state,reward,done, pos = core.step(action_idx)
 
-                                current_rewards = np.append(current_rewards,reward)
                                 
-                                if reward != -1:
+                                if reward != -1 and not eval_mode:
                                     experience_buffer.append((current_state,action_idx,reward,next_state,done))
 
                                 if current_T==T:
@@ -578,37 +582,44 @@ if __name__ == "__main__":
                                     current_T=0
                                 else:
                                     current_T+=1
+
                                 state = next_state
                                 ep_reward+=reward
 
                                 current_trajectory.append(pos)
 
                                 if ep_reward<-100:
-                                    call(["bash",macro_file])
-                                    print("Macro Called")
-                                    time.sleep(1)
-                                    # core.scene_reset()
+                                    # call(["bash",macro_file])
+                                    # print("Macro Called")
                                     # time.sleep(1)
-                                    # core.car_spawner()
-                                    break
+                                    done = True
+                                    invalid_flag = True
+                                    
 
-                        trajectory[i] = np.array(current_trajectory)
+                        if invalid_flag:
+                            invalid_flag = False
+                            continue
+                        
+                        trajectory[current_epoch] = np.array(current_trajectory)
 
-                        writer.add_scalar('Reward',ep_reward,i)
+                        writer.add_scalar('Reward',ep_reward,current_epoch)
+                        writer.add_scalar('Epsilon',epsilon,current_epoch)
                         if eval_mode:
-                            writer.add_scalar('Eval Reward',ep_reward,i)
+                            writer.add_scalar('Eval Reward',ep_reward,current_epoch)
 
                         epsilon *= decay_rate
-                        episodes.append(i)
+                        episodes.append(current_epoch)
                         reward_list = np.append(reward_list,ep_reward)
+                        rolling_rewards.append(ep_reward)
 
                         if eval_mode:
                             print(f"Eval Reward:{ep_reward}")
+                            rolling_eval_rewards.append(ep_reward)
                         else:
-                            print(f"Epoch:{i} {greeds}/{exploits} Reward:{ep_reward} Epsilon:{epsilon}")
+                            print(f"Epoch:{current_epoch} {greeds}/{exploits} Reward:{ep_reward} Epsilon:{epsilon}")
                     
                         with open(reward_path,'a') as f:
-                            f.write(f"{i}\t{ep_reward}\n")
+                            f.write(f"{current_epoch}\t{ep_reward}\n")
                             
                         if current_C==C:
                             target_network.load_state_dict(online_network.state_dict())
@@ -617,7 +628,7 @@ if __name__ == "__main__":
                             current_C+=1
                         
                             with open(best_path,'a+') as f:
-                                f.write(f"{i}\t{ep_reward}\n")
+                                f.write(f"{current_epoch}\t{ep_reward}\n")
 
                         means = np.mean(reward_list[-10:]) if len(reward_list)>10 else None
 
@@ -628,9 +639,20 @@ if __name__ == "__main__":
                             print("Saved Best Network")
                             best_reward = means
 
+                        if len(rolling_rewards)>10:
+                            means = np.mean(rolling_rewards)
+                            writer.add_scalar('Rolling Reward',means,current_epoch)
+                            rolling_rewards = []
+
+                        if len(rolling_eval_rewards)>10:
+                            means = np.mean(rolling_eval_rewards)
+                            writer.add_scalar('Rolling Eval Reward',means,current_epoch)
+                            rolling_eval_rewards = []
 
                         with open(traj_path,'wb') as f:
                             pickle.dump(trajectory,f)
+
+                        current_epoch+=1
 
                     except (KeyboardInterrupt,rospy.ROSInterruptException) as e:
                         print(e)
