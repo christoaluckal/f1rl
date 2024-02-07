@@ -6,3 +6,4 @@ TODO
 - [ ] Adding ROS params for common hyper-params
 - [ ] Separating policy loop for future Gradient/Value Based methods
 - [ ] Adding MPC logic to test best reward
+- [ ] Add Checkpoints
