@@ -617,15 +617,15 @@ if __name__ == "__main__":
                                 current_trajectory.append(pos)
 
                                 if ep_reward<-100:
-                                    # call(["bash",macro_file])
-                                    # print("Macro Called")
-                                    # time.sleep(1)
                                     done = True
                                     invalid_flag = True
                                     
 
                         if invalid_flag:
                             invalid_flag = False
+                            call(["bash",macro_file])
+                            print("Macro Called")
+                            time.sleep(1)
                             continue
                         
                         trajectory[current_epoch] = np.array(current_trajectory)
@@ -669,12 +669,12 @@ if __name__ == "__main__":
                             # print("Saved Best Network")
                             best_reward = means
 
-                        if len(rolling_rewards)>10:
+                        if len(rolling_rewards)==10:
                             means = np.mean(rolling_rewards)
                             writer.add_scalar('Rolling Reward',means,current_epoch)
                             rolling_rewards = []
 
-                        if len(rolling_eval_rewards)>10:
+                        if len(rolling_eval_rewards)==10:
                             means = np.mean(rolling_eval_rewards)
                             writer.add_scalar('Rolling Eval Reward',means,current_epoch)
                             rolling_eval_rewards = []
