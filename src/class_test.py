@@ -118,10 +118,11 @@ class CoreCarEnv():
         csv_f = track_file
         x_idx = 0
         y_idx = 1
-        self.global_path,self.track_length,self.x_spline,self.y_spline = pathgen.get_spline_path(csv_f,x_idx,y_idx)
+        scale = 0.5
+        self.global_path,self.track_length,self.x_spline,self.y_spline = pathgen.get_scaled_spline_path(csv_f,x_idx,y_idx,scale)
 
         speeds = np.arange(1,4.1,0.2)
-        turns = np.arange(-0.3,0.31,0.01)
+        turns = np.arange(-0.3,0.31,0.1)
 
         self.action_map = {}
         self.trajectory = []
@@ -228,16 +229,16 @@ class CoreCarEnv():
         if random_reset:
             frac = 1
             rand_point = np.random.randint(0,int(self.global_path.shape[0]*frac))
-            next_point = rand_point+1 if rand_point<self.global_path.shape[0]-1 else 0
+            next_point = rand_point+5 if rand_point<self.global_path.shape[0]-5 else 0
 
             x1,y1 = self.global_path[rand_point,0],self.global_path[rand_point,1]
 
-            x1 += np.random.uniform(-0.5,0.5)
-            y1 += np.random.uniform(-0.5,0.5)
+            x1 += np.random.uniform(-1,1)
+            y1 += np.random.uniform(-1,1)
 
             yaw = math.atan2(self.global_path[next_point,1]-y1,self.global_path[next_point,0]-x1)
 
-            yaw += np.random.uniform(-np.pi/4,np.pi/4)
+            yaw += np.random.uniform(-0.2,0.2)
 
             # print(f"Resetting to {x1},{y1},{yaw}")
 
@@ -272,7 +273,7 @@ class CoreCarEnv():
         
         self.spline_offset = spline_t
 
-        state = current_state
+        state = [current_state[2],current_state[3]]
         spline_params = np.arange(spline_t,spline_t+3.1,0.2)
 
         for t in spline_params:
@@ -286,7 +287,7 @@ class CoreCarEnv():
         current_state = [0,0,0,0]
         spline_t = self.closest_spline_param(distance_to_spline,current_state[0],current_state[1],self.x_spline,self.y_spline)
 
-        state = current_state
+        state = [current_state[2],current_state[3]]
         spline_params = np.arange(spline_t,spline_t+3.1,0.2)
 
         for t in spline_params:
@@ -324,10 +325,11 @@ class CoreCarEnv():
 
         self.trajectory.append([spline_x,spline_y])
 
-        state = current_state
+        state = [current_state[2],current_state[3]]
         spline_params = np.arange(closest_spline_t[0],closest_spline_t[0]+3.1,0.2)
 
         p = []
+
 
         for t in spline_params:
             lx = self.x_spline(t)-current_state[0]
@@ -350,7 +352,15 @@ class CoreCarEnv():
 
         self.timesteps+=1
         # move_dist = self.euclidean_dist(current_state[0:2],prev_state[0:2])
+
         move_dist = (closest_spline_t[0]-prev_spline_t[0])
+
+        if abs(move_dist)>10:
+            if closest_spline_t[0]>prev_spline_t[0]:
+                move_dist = self.track_length-closest_spline_t[0]+prev_spline_t[0]
+            else:
+                move_dist = self.track_length-prev_spline_t[0]+closest_spline_t[0]
+
         self.spline_coverage+= move_dist
 
         # print(self.spline_coverage,'|',closest_spline_t[0],'|',prev_spline_t[0],'|',move_dist)
@@ -364,28 +374,33 @@ class CoreCarEnv():
             reward += move_dist*current_state[3]
 
             if spline_dist<1:
-                reward += 5*1e-1
+                reward += 10*1e-1
 
             elif spline_dist<2:
-                reward += 2*1e-1
+                reward += 5*1e-1
 
             if spline_dist>3:
                 print(f"Off-Track. Covered:{self.spline_coverage}")
                 
                 done=True
-                reward=-10
+                reward=-50
 
             if self.spline_coverage > self.track_length/2:
                 print("Track Covered")
                 done=True
-                reward+=500
+                reward+=100
 
             if len(self.trajectory)>100:
                 temp = np.array(self.trajectory)
                 if abs(temp[-100,0]-temp[-1,0])<0.1 and abs(temp[-100,1]-temp[-1,1])<0.1:
                     print("Step-Stalled")
                     done=True
-                    reward-=10
+                    reward-=50
+
+            if self.spline_coverage<-5:
+                print("Backwards")
+                done=True
+                reward-=20
 
         return state,reward,done,[current_state[0],current_state[1]]
         
@@ -476,96 +491,97 @@ def shutdown_hook():
 if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    architectures = [[128,128,128]]
+    architectures = [[64,64],[128,128],[256,256],[512,512],[1024,1024]]
     is_lab = rospy.get_param("is_lab",False)
     macro_file = os.path.join(rp.get_path('f1rl'),'src/macro.sh' if (not is_lab) else 'src/macro_lab.sh')
 
-    exp_counter = 0
+    while not rospy.is_shutdown():
+        for a in architectures:
 
-    for a in architectures:
-        exp_counter+=1
-        core = CoreCarEnv()
-        done=False
-        ref_list = np.array(core.global_path[:,0:2])
-        max_time = 100
-        epochs = 6000
-        max_epsilon = 1
-        min_epsilon = 0.01
-        decay_rate = (min_epsilon/max_epsilon)**(1/epochs)
-        epsilon = max_epsilon
+            core = CoreCarEnv()
+            done=False
+            ref_list = np.array(core.global_path[:,0:2])
+            max_time = 100
+            epochs = 10000
+            max_epsilon = 1
+            min_epsilon = 0.05
+            decay_rate = (min_epsilon/max_epsilon)**(1/epochs)
+            epsilon = max_epsilon
+            
+            archs = a
+
+            architecture_str = ""
+            for i in range(len(archs)):
+                architecture_str+=str(archs[i])
+                if i!=len(archs)-1:
+                    architecture_str+="_"
+
+            experiment_name = f"arch_{architecture_str}"
+            
+            exp_dir = build_logging(experiment_name)
+
+
+            writer = SummaryWriter(os.path.join(exp_dir,'../tensorboard',experiment_name))
+
+            n_states = core.get_state_count()
+
+            episodes = []
+            reward_list = np.array([])
+            mean_list = np.array([])
+
+
+            online_network = Network(n_states,core.action_count,archs).to(device)
+            target_network = Network(n_states,core.action_count,archs).to(device)
+
+            target_network.load_state_dict(online_network.state_dict())
+
+            best_reward = -1e6
+
+            discount_rate = 0.99
+            rate = 1e-3
+            policy = EpsilonGreedy.policy
+            trainer = NaiveDQN()
+
+            C = 20
+            T = 20
+            
+            current_C = 0
+            current_T = 0
+            rospy.on_shutdown(shutdown_hook)
+
+            eval_mode = False
+
+
+            trajectory = {}
+            # np.save(os.path.join(rp.get_path('f1rl'),f'src/runs/path.npy'),core.global_path[:,0:2])
+            np.save(os.path.join(exp_dir,'logs','path.npy'),core.global_path[:,0:2])
+
+            reward_path,best_path,traj_path = create_files(exp_dir)
+
+
+            # core.scene_reset()
+            # time.sleep(1)
+            # core.car_spawner()
+            call(["bash",macro_file])
+            print("Macro Called")
+            time.sleep(1)
+
+            epoch_counter = 0
+            last_valid_epoch = 1
+            current_epoch = 1
+            invalid_flag = False
+
+            rolling_rewards = []
+            rolling_eval_rewards = []
+            all_rewards = []
+
         
-        archs = a
-
-        architecture_str = ""
-        for i in range(len(archs)):
-            architecture_str+=str(archs[i])
-            if i!=len(archs)-1:
-                architecture_str+="_"
-
-        experiment_name = f"arch_{architecture_str}"
-        
-        exp_dir = build_logging(experiment_name)
-
-
-        writer = SummaryWriter(os.path.join(exp_dir,'../tensorboard',experiment_name))
-
-        n_states = core.get_state_count()
-
-        episodes = []
-        reward_list = np.array([])
-        mean_list = np.array([])
-
-
-        online_network = Network(n_states,core.action_count,archs).to(device)
-        target_network = Network(n_states,core.action_count,archs).to(device)
-
-        target_network.load_state_dict(online_network.state_dict())
-
-        best_reward = -1e6
-
-        discount_rate = 0.99
-        rate = 1e-3
-        policy = EpsilonGreedy.policy
-        trainer = NaiveDQN()
-
-        C = 100
-        T = 40
-        
-        current_C = 0
-        current_T = 0
-        rospy.on_shutdown(shutdown_hook)
-
-        eval_mode = False
-
-
-        trajectory = {}
-        # np.save(os.path.join(rp.get_path('f1rl'),f'src/runs/path.npy'),core.global_path[:,0:2])
-        np.save(os.path.join(exp_dir,'logs','path.npy'),core.global_path[:,0:2])
-
-        reward_path,best_path,traj_path = create_files(exp_dir)
-
-
-        # core.scene_reset()
-        # time.sleep(1)
-        # core.car_spawner()
-        call(["bash",macro_file])
-        print("Macro Called")
-        time.sleep(1)
-
-        epoch_counter = 0
-        last_valid_epoch = 1
-        current_epoch = 1
-        invalid_flag = False
-
-        rolling_rewards = []
-        rolling_eval_rewards = []
-
-        while not rospy.is_shutdown():
             path_array = np.array(core.global_path[:,0:2])
             m = rviz_marker(path_array,0)
-            core.rviz_pub.publish(m)
+            # core.rviz_pub.publish(m)
             try:
                 while current_epoch<epochs:
+                    core.rviz_pub.publish(m)
                     print(f"Epoch:{current_epoch}")
                     if current_epoch%25==0:
                         eval_mode = True
@@ -574,7 +590,9 @@ if __name__ == "__main__":
                     
                     try:
                         state = core.reset()
+                        
                         rospy.sleep(1)
+
                         done=False
                         start = time.time()
                         ep_reward=0
@@ -639,10 +657,17 @@ if __name__ == "__main__":
                         episodes.append(current_epoch)
                         reward_list = np.append(reward_list,ep_reward)
                         rolling_rewards.append(ep_reward)
+                        all_rewards.append(ep_reward)
 
                         if eval_mode:
                             print(f"Eval Reward:{ep_reward}")
                             rolling_eval_rewards.append(ep_reward)
+                            if ep_reward>best_reward:
+                                best_reward = ep_reward
+                                print(f"Best Reward:{best_reward}")
+                                torch.save(online_network.state_dict(),os.path.join(exp_dir,'models',f'best_online.pth'))
+                                torch.save(target_network.state_dict(),os.path.join(exp_dir,'models',f'best_target.pth'))
+
                         else:
                             print(f"Epoch:{current_epoch} {greeds}/{exploits} Reward:{ep_reward} Epsilon:{epsilon}")
 
@@ -660,15 +685,7 @@ if __name__ == "__main__":
                             with open(best_path,'a+') as f:
                                 f.write(f"{current_epoch}\t{ep_reward}\n")
 
-                        means = np.mean(reward_list[-10:]) if len(reward_list)>10 else None
-
-                        if (means is not None) and (means>best_reward):
-                            # print(f"Best Mean Reward:{means}")
-                            torch.save(online_network.state_dict(),os.path.join(exp_dir,'models',f'{experiment_name}_online_network_best.pth'))
-                            torch.save(target_network.state_dict(),os.path.join(exp_dir,'models',f'{experiment_name}_target_network_best.pth'))
-                            # print("Saved Best Network")
-                            best_reward = means
-
+                        
                         if len(rolling_rewards)==10:
                             means = np.mean(rolling_rewards)
                             writer.add_scalar('Rolling Reward',means,current_epoch)
@@ -678,6 +695,11 @@ if __name__ == "__main__":
                             means = np.mean(rolling_eval_rewards)
                             writer.add_scalar('Rolling Eval Reward',means,current_epoch)
                             rolling_eval_rewards = []
+
+                        if current_epoch>epochs//2:
+                            if np.mean(all_rewards[-10:])<0:
+                                print("Early Stopping")
+                                break
 
                         with open(traj_path,'wb') as f:
                             pickle.dump(trajectory,f)
