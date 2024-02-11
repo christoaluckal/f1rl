@@ -118,8 +118,9 @@ class CoreCarEnv():
         csv_f = track_file
         x_idx = 0
         y_idx = 1
-        scale = 0.5
+        scale = 0.25
         self.global_path,self.track_length,self.x_spline,self.y_spline = pathgen.get_scaled_spline_path(csv_f,x_idx,y_idx,scale)
+
 
         speeds = np.arange(1,4.1,0.2)
         turns = np.arange(-0.3,0.31,0.1)
@@ -137,7 +138,9 @@ class CoreCarEnv():
         self.timesteps = 0
 
         self.spline_coverage = 0
-        self.spline_offset = 0
+        self.spline_start = 0
+
+        self.slow_counter = 0
         
         
 
@@ -219,15 +222,16 @@ class CoreCarEnv():
         self.car_spawner_pub.publish(Bool(True))
         self.rate.sleep()
 
-    def reset(self):
+    def reset(self,eps=None):
         counter = 0
         self.timesteps = 0
         self.spline_coverage = 0
         self.trajectory = []
-        random_reset = rospy.get_param("random_reset",False)
-        random_reset = True
-        if random_reset:
-            frac = 1
+        self.slow_counter = 0
+        # random_reset = rospy.get_param("random_reset",False)
+        choice = np.random.uniform(0,1)
+        if choice<-1:
+            frac = eps
             rand_point = np.random.randint(0,int(self.global_path.shape[0]*frac))
             next_point = rand_point+5 if rand_point<self.global_path.shape[0]-5 else 0
 
@@ -244,8 +248,8 @@ class CoreCarEnv():
 
             quat = quaternion_from_euler(0,0,yaw)
         else:
-            x1,y1 = 0,np.random.uniform(-0.5,0.5)
-            yaw = np.random.uniform(-np.pi/4,np.pi/4)
+            x1,y1 = 0,0
+            yaw = 0
             quat = quaternion_from_euler(0,0,yaw)
 
         while(counter<2):
@@ -271,7 +275,7 @@ class CoreCarEnv():
         current_state = self.vehicle_state.get_state()[0]
         spline_t = self.closest_spline_param(distance_to_spline,current_state[0],current_state[1],self.x_spline,self.y_spline)
         
-        self.spline_offset = spline_t
+        self.spline_start = spline_t[0]
 
         state = [current_state[2],current_state[3]]
         spline_params = np.arange(spline_t,spline_t+3.1,0.2)
@@ -306,6 +310,7 @@ class CoreCarEnv():
         # print(self.trajectory.shape)
         reward = 0
         done = False
+        valid = True
         prev_state = core.vehicle_state.get_state()[0]
         prev_spline_t = core.closest_spline_param(distance_to_spline,prev_state[0],prev_state[1],core.x_spline,core.y_spline)
 
@@ -325,19 +330,29 @@ class CoreCarEnv():
 
         self.trajectory.append([spline_x,spline_y])
 
-        state = [current_state[2],current_state[3]]
         spline_params = np.arange(closest_spline_t[0],closest_spline_t[0]+3.1,0.2)
 
+        
         p = []
-
+        goal_states = []
 
         for t in spline_params:
             lx = self.x_spline(t)-current_state[0]
             ly = self.y_spline(t)-current_state[1]
-            state.append(lx)
-            state.append(ly)
+            # state.append(lx)
+            # state.append(ly)
+            goal_states.append([lx,ly])
             
             p.append([self.x_spline(t),self.y_spline(t)])
+
+        goal_states = np.array(goal_states)
+
+        rot_mat = np.array([[math.cos(current_state[2]),-math.sin(current_state[2])],[math.sin(current_state[2]),math.cos(current_state[2])]])
+
+        goal_states = np.dot(goal_states,rot_mat)
+
+        state = np.insert(goal_states.flatten(),0,current_state[3])
+        state = np.insert(state,0,current_state[2])
 
         marker = rviz_marker([[current_state[0],current_state[1]]],1)
         self.rviz_pub.publish(marker)
@@ -345,7 +360,6 @@ class CoreCarEnv():
         marker = rviz_marker(p,2)
         self.rviz_pub.publish(marker)
 
-        state = np.array(state)
 
         spline_dist = self.euclidean_dist(current_state[0:2],closest_spline_point)
 
@@ -361,31 +375,37 @@ class CoreCarEnv():
             else:
                 move_dist = self.track_length-prev_spline_t[0]+closest_spline_t[0]
 
-        self.spline_coverage+= move_dist
+        self.spline_coverage = (closest_spline_t[0]-self.spline_start)
 
         # print(self.spline_coverage,'|',closest_spline_t[0],'|',prev_spline_t[0],'|',move_dist)
-        # print(f"Move Dist:{move_dist}")
+
         if current_state[3]<0.1:
             reward=-1
+            self.slow_counter+=1
 
-        
+            if self.slow_counter > 100:
+                valid = False
+                done = True
+
         else:
 
-            reward += move_dist*current_state[3]
+            # reward += move_dist*current_state[3] - (4-current_state[3])*1e-2
 
-            if spline_dist<1:
-                reward += 10*1e-1
+            # if spline_dist<1:
+            #     reward += 10*1e-1
 
-            elif spline_dist<2:
-                reward += 5*1e-1
+            # elif spline_dist<2:
+            #     reward += 5*1e-1
 
-            if spline_dist>3:
-                print(f"Off-Track. Covered:{self.spline_coverage}")
+            reward += move_dist*current_state[3]*5
+
+            if spline_dist>1:
+                print(f"Off-Track. Covered:{self.spline_coverage}/{self.track_length}")
                 
                 done=True
                 reward=-50
 
-            if self.spline_coverage > self.track_length/2:
+            if self.spline_coverage > self.track_length*0.9:
                 print("Track Covered")
                 done=True
                 reward+=100
@@ -397,12 +417,12 @@ class CoreCarEnv():
                     done=True
                     reward-=50
 
-            if self.spline_coverage<-5:
-                print("Backwards")
-                done=True
-                reward-=20
+            # if self.spline_coverage<-10:
+            #     print("Backwards")
+            #     done=True
+            #     reward-=20
 
-        return state,reward,done,[current_state[0],current_state[1]]
+        return state,reward,done,valid,[current_state[0],current_state[1]]
         
 def build_logging(experiment_name):
     root_dir = os.path.join(rp.get_path('f1rl'),'src')
@@ -589,11 +609,12 @@ if __name__ == "__main__":
                         eval_mode = False
                     
                     try:
-                        state = core.reset()
+                        state = core.reset(epsilon)
                         
                         rospy.sleep(1)
 
                         done=False
+                        valid = True
                         start = time.time()
                         ep_reward=0
                         greeds = 0
@@ -617,7 +638,7 @@ if __name__ == "__main__":
                                 else:
                                     exploits+=1
 
-                                next_state,reward,done, pos = core.step(action_idx)
+                                next_state,reward,done,valid, pos = core.step(action_idx)
 
                                 
                                 if reward != -1 and not eval_mode:
@@ -634,9 +655,10 @@ if __name__ == "__main__":
 
                                 current_trajectory.append(pos)
 
-                                if ep_reward<-100:
-                                    done = True
+                                if done and not valid:
                                     invalid_flag = True
+                                    print("Invalid Trajectory")
+                                    break
                                     
 
                         if invalid_flag:
@@ -697,7 +719,7 @@ if __name__ == "__main__":
                             rolling_eval_rewards = []
 
                         if current_epoch>epochs//2:
-                            if np.mean(all_rewards[-10:])<0:
+                            if np.mean(all_rewards[-100:])<0:
                                 print("Early Stopping")
                                 break
 

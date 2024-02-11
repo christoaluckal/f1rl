@@ -3,3 +3,4 @@
 *.pyc
 src/__pycache__/*
 src/runs
+*.zip
