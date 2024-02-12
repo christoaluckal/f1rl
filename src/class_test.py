@@ -246,8 +246,6 @@ class CoreCarEnv():
 
             yaw = math.atan2(self.global_path[next_point,1]-y1,self.global_path[next_point,0]-x1)
 
-            yaw += np.random.uniform(-0.1,0.1)
-
             # print(f"Resetting to {x1},{y1},{yaw}")
 
             quat = quaternion_from_euler(0,0,yaw)
@@ -282,11 +280,18 @@ class CoreCarEnv():
         self.spline_start = spline_t[0]
 
         state = [current_state[2],current_state[3]]
+        
         spline_params = np.arange(spline_t,spline_t+3.1,0.2)
 
         for t in spline_params:
-            state.append(self.x_spline(t)-current_state[0])
-            state.append(self.y_spline(t)-current_state[1])
+            try:
+                state.append(self.x_spline(t)-current_state[0])
+                state.append(self.y_spline(t)-current_state[1])
+            except:
+                x_sp = self.x_spline(t%self.track_length)
+                y_sp = self.y_spline(t%self.track_length)
+                state.append(x_sp-current_state[0])
+                state.append(y_sp-current_state[1])
 
         state = np.array(state)
         return state
@@ -349,6 +354,8 @@ class CoreCarEnv():
             
             p.append([self.x_spline(t),self.y_spline(t)])
 
+        path_yaw = math.atan2(p[-1][1]-p[0][1],p[-1][0]-p[0][0])
+
         goal_states = np.array(goal_states)
 
         rot_mat = np.eye(2)
@@ -381,11 +388,14 @@ class CoreCarEnv():
                 move_dist = self.track_length-prev_spline_t[0]+closest_spline_t[0]
 
         # self.spline_coverage = (closest_spline_t[0]-self.spline_start)
-                
+        
         if self.spline_start > closest_spline_t[0]+1:
             self.spline_coverage = self.track_length+closest_spline_t[0]-self.spline_start
+            if abs(current_state[2]-path_yaw) > math.pi*0.8:
+                self.spline_coverage = -1*self.spline_coverage
         else:
             self.spline_coverage = closest_spline_t[0]-self.spline_start
+
 
         if current_state[3]<0.1:
             reward=-1
@@ -395,6 +405,9 @@ class CoreCarEnv():
                 valid = False
                 done = True
 
+        elif self.spline_coverage < -4:
+            valid = False
+            done = True
         else:
 
             # reward += move_dist*current_state[3] - (4-current_state[3])*1e-2
@@ -412,7 +425,7 @@ class CoreCarEnv():
                 done=True
                 reward=-100
 
-            if self.spline_coverage > self.track_length*0.9:
+            if self.spline_coverage > self.track_length*0.9 and len(self.trajectory)>100:
                 print("Track Covered")
                 done=True
                 reward+=100
@@ -518,7 +531,7 @@ def shutdown_hook():
 if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    architectures = [[64,64],[128,128],[256,256],[512,512],[1024,1024]]
+    architectures = [[128,128],[256,256],[512,512],[1024,1024]]
     is_lab = rospy.get_param("is_lab",False)
     macro_file = os.path.join(rp.get_path('f1rl'),'src/macro.sh' if (not is_lab) else 'src/macro_lab.sh')
 
