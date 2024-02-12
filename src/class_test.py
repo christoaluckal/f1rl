@@ -230,7 +230,7 @@ class CoreCarEnv():
         self.slow_counter = 0
         # random_reset = rospy.get_param("random_reset",False)
         choice = np.random.uniform(0,1)
-        if choice>eps:
+        if choice<eps:
             frac_start = 0
             frac_end = eps
             # rand_point = np.random.randint(0,int(self.global_path.shape[0]*frac))
