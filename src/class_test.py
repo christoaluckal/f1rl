@@ -123,7 +123,7 @@ class CoreCarEnv():
 
 
         speeds = np.arange(1,4.1,0.2)
-        turns = np.arange(-0.3,0.31,0.1)
+        turns = np.arange(-0.4,0.41,0.1)
 
         self.action_map = {}
         self.trajectory = []
@@ -230,9 +230,13 @@ class CoreCarEnv():
         self.slow_counter = 0
         # random_reset = rospy.get_param("random_reset",False)
         choice = np.random.uniform(0,1)
-        if choice<-1:
-            frac = eps
-            rand_point = np.random.randint(0,int(self.global_path.shape[0]*frac))
+        if choice>eps:
+            frac_start = 0
+            frac_end = eps
+            # rand_point = np.random.randint(0,int(self.global_path.shape[0]*frac))
+            start_idx = int(self.global_path.shape[0]*frac_start)
+            end_idx = int(self.global_path.shape[0]*frac_end)
+            rand_point = np.random.randint(start_idx,end_idx)
             next_point = rand_point+5 if rand_point<self.global_path.shape[0]-5 else 0
 
             x1,y1 = self.global_path[rand_point,0],self.global_path[rand_point,1]
@@ -242,7 +246,7 @@ class CoreCarEnv():
 
             yaw = math.atan2(self.global_path[next_point,1]-y1,self.global_path[next_point,0]-x1)
 
-            yaw += np.random.uniform(-0.2,0.2)
+            yaw += np.random.uniform(-0.1,0.1)
 
             # print(f"Resetting to {x1},{y1},{yaw}")
 
@@ -347,7 +351,8 @@ class CoreCarEnv():
 
         goal_states = np.array(goal_states)
 
-        rot_mat = np.array([[math.cos(current_state[2]),-math.sin(current_state[2])],[math.sin(current_state[2]),math.cos(current_state[2])]])
+        rot_mat = np.eye(2)
+        # rot_mat = np.array([[math.cos(current_state[2]),-math.sin(current_state[2])],[math.sin(current_state[2]),math.cos(current_state[2])]])
 
         goal_states = np.dot(goal_states,rot_mat)
 
@@ -375,9 +380,12 @@ class CoreCarEnv():
             else:
                 move_dist = self.track_length-prev_spline_t[0]+closest_spline_t[0]
 
-        self.spline_coverage = (closest_spline_t[0]-self.spline_start)
-
-        # print(self.spline_coverage,'|',closest_spline_t[0],'|',prev_spline_t[0],'|',move_dist)
+        # self.spline_coverage = (closest_spline_t[0]-self.spline_start)
+                
+        if self.spline_start > closest_spline_t[0]+1:
+            self.spline_coverage = self.track_length+closest_spline_t[0]-self.spline_start
+        else:
+            self.spline_coverage = closest_spline_t[0]-self.spline_start
 
         if current_state[3]<0.1:
             reward=-1
@@ -397,13 +405,12 @@ class CoreCarEnv():
             # elif spline_dist<2:
             #     reward += 5*1e-1
 
-            reward += move_dist*current_state[3]*5
+            reward += move_dist*current_state[3]*10
 
             if spline_dist>1:
                 print(f"Off-Track. Covered:{self.spline_coverage}/{self.track_length}")
-                
                 done=True
-                reward=-50
+                reward=-100
 
             if self.spline_coverage > self.track_length*0.9:
                 print("Track Covered")
