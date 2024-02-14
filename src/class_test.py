@@ -141,6 +141,7 @@ class CoreCarEnv():
         self.spline_start = 0
 
         self.slow_counter = 0
+        self.spline_offset = 0
         
         
 
@@ -228,11 +229,12 @@ class CoreCarEnv():
         self.spline_coverage = 0
         self.trajectory = []
         self.slow_counter = 0
+        self.spline_offset = 0
         # random_reset = rospy.get_param("random_reset",False)
         choice = np.random.uniform(0,1)
         if choice<eps:
             frac_start = 0
-            frac_end = eps
+            frac_end = 0.05
             # rand_point = np.random.randint(0,int(self.global_path.shape[0]*frac))
             start_idx = int(self.global_path.shape[0]*frac_start)
             end_idx = int(self.global_path.shape[0]*frac_end)
@@ -244,7 +246,9 @@ class CoreCarEnv():
             x1 += np.random.uniform(-1,1)
             y1 += np.random.uniform(-1,1)
 
-            yaw = math.atan2(self.global_path[next_point,1]-y1,self.global_path[next_point,0]-x1)
+            # yaw = math.atan2(self.global_path[next_point,1]-y1,self.global_path[next_point,0]-x1)
+
+            yaw = math.pi-1e-2
 
             # print(f"Resetting to {x1},{y1},{yaw}")
 
@@ -254,7 +258,7 @@ class CoreCarEnv():
             yaw = 0
             quat = quaternion_from_euler(0,0,yaw)
 
-        while(counter<2):
+        while(counter<5):
             pose = Pose()
             pose.position.x = x1
             pose.position.y = y1
@@ -278,6 +282,7 @@ class CoreCarEnv():
         spline_t = self.closest_spline_param(distance_to_spline,current_state[0],current_state[1],self.x_spline,self.y_spline)
         
         self.spline_start = spline_t[0]
+        print(f"Spline Start:{self.spline_start}")
 
         state = [current_state[2],current_state[3]]
         
@@ -327,7 +332,7 @@ class CoreCarEnv():
         ack_msg = AckermannDrive()
         action = self.action_map[idx]
         ack_msg.speed = action[0]
-        ack_msg.steering_angle = action[1]
+        ack_msg.steering_angle = 0
         self.drive_pub.publish(ack_msg)
         self.rate.sleep()
 
@@ -387,15 +392,23 @@ class CoreCarEnv():
             else:
                 move_dist = self.track_length-prev_spline_t[0]+closest_spline_t[0]
 
-        # self.spline_coverage = (closest_spline_t[0]-self.spline_start)
-        
-        if self.spline_start > closest_spline_t[0]+1:
-            self.spline_coverage = self.track_length+closest_spline_t[0]-self.spline_start
-            if abs(current_state[2]-path_yaw) > math.pi*0.8:
-                self.spline_coverage = -1*self.spline_coverage
-        else:
-            self.spline_coverage = closest_spline_t[0]-self.spline_start
 
+        # if self.spline_start > closest_spline_t[0]+1:
+        #     self.spline_coverage = abs(self.spline_start-closest_spline_t[0])
+        #     if abs(current_state[2]-path_yaw) > math.pi*0.8:
+        #         self.spline_coverage = -1*self.spline_coverage
+
+        #     print(f"A)Spline Start:{np.round(self.spline_start,3)}\nClosest Spline:{np.round(closest_spline_t[0],3)}\nCoverage:{np.round(self.spline_coverage,3)}")
+        # else:
+        #     self.spline_coverage = closest_spline_t[0]-self.spline_start
+        #     print(f"B)Spline Start:{np.round(self.spline_start,3)}\nClosest Spline:{np.round(closest_spline_t[0],3)}\nCoverage:{np.round(self.spline_coverage,3)}")
+            
+        if self.spline_start > closest_spline_t[0]+1:
+            # backwards
+            pass
+        else:
+            # forwards
+            pass
 
         if current_state[3]<0.1:
             reward=-1
@@ -406,41 +419,29 @@ class CoreCarEnv():
                 done = True
 
         elif self.spline_coverage < -4:
-            valid = False
+            print(f"Off-Track. Covered:{self.spline_coverage}/{self.track_length}")
+            reward = -10
             done = True
         else:
 
-            # reward += move_dist*current_state[3] - (4-current_state[3])*1e-2
-
-            # if spline_dist<1:
-            #     reward += 10*1e-1
-
-            # elif spline_dist<2:
-            #     reward += 5*1e-1
-
-            reward += move_dist*current_state[3]*10
+            reward += move_dist*(current_state[3])*5
 
             if spline_dist>1:
                 print(f"Off-Track. Covered:{self.spline_coverage}/{self.track_length}")
                 done=True
-                reward=-100
+                reward=-10
 
             if self.spline_coverage > self.track_length*0.9 and len(self.trajectory)>100:
                 print("Track Covered")
                 done=True
-                reward+=100
+                reward+=10
 
             if len(self.trajectory)>100:
                 temp = np.array(self.trajectory)
                 if abs(temp[-100,0]-temp[-1,0])<0.1 and abs(temp[-100,1]-temp[-1,1])<0.1:
                     print("Step-Stalled")
                     done=True
-                    reward-=50
-
-            # if self.spline_coverage<-10:
-            #     print("Backwards")
-            #     done=True
-            #     reward-=20
+                    reward-=5
 
         return state,reward,done,valid,[current_state[0],current_state[1]]
         
@@ -622,7 +623,7 @@ if __name__ == "__main__":
             try:
                 while current_epoch<epochs:
                     core.rviz_pub.publish(m)
-                    print(f"Epoch:{current_epoch}")
+                    print(f"\nEpoch:{current_epoch}")
                     if current_epoch%25==0:
                         eval_mode = True
                     else:
@@ -711,7 +712,7 @@ if __name__ == "__main__":
                                 torch.save(target_network.state_dict(),os.path.join(exp_dir,'models',f'best_target.pth'))
 
                         else:
-                            print(f"Epoch:{current_epoch} {greeds}/{exploits} Reward:{ep_reward} Epsilon:{epsilon}")
+                            print(f"Epoch:{current_epoch} {greeds}/{exploits} Reward:{ep_reward} Epsilon:{epsilon}\n")
 
                         writer.add_scalar('Coverage',core.spline_coverage,current_epoch)
                     
