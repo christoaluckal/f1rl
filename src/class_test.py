@@ -142,6 +142,8 @@ class CoreCarEnv():
 
         self.slow_counter = 0
         self.spline_offset = 0
+
+        self.cross_over = False
         
         
 
@@ -230,11 +232,12 @@ class CoreCarEnv():
         self.trajectory = []
         self.slow_counter = 0
         self.spline_offset = 0
+        self.cross_over = False
         # random_reset = rospy.get_param("random_reset",False)
         choice = np.random.uniform(0,1)
         if choice<eps:
-            frac_start = 0
-            frac_end = 0.05
+            frac_start = 0.9
+            frac_end = 1
             # rand_point = np.random.randint(0,int(self.global_path.shape[0]*frac))
             start_idx = int(self.global_path.shape[0]*frac_start)
             end_idx = int(self.global_path.shape[0]*frac_end)
@@ -248,7 +251,13 @@ class CoreCarEnv():
 
             # yaw = math.atan2(self.global_path[next_point,1]-y1,self.global_path[next_point,0]-x1)
 
-            yaw = math.pi-1e-2
+            spline_t_dash = self.closest_spline_param(distance_to_spline,x1,y1,self.x_spline,self.y_spline)
+        
+            dx_dt = self.x_spline(spline_t_dash,1)
+            dy_dt = self.y_spline(spline_t_dash,1)
+
+            yaw = math.atan2(dy_dt,dx_dt)
+
 
             # print(f"Resetting to {x1},{y1},{yaw}")
 
@@ -393,22 +402,25 @@ class CoreCarEnv():
                 move_dist = self.track_length-prev_spline_t[0]+closest_spline_t[0]
 
 
-        # if self.spline_start > closest_spline_t[0]+1:
-        #     self.spline_coverage = abs(self.spline_start-closest_spline_t[0])
-        #     if abs(current_state[2]-path_yaw) > math.pi*0.8:
-        #         self.spline_coverage = -1*self.spline_coverage
-
-        #     print(f"A)Spline Start:{np.round(self.spline_start,3)}\nClosest Spline:{np.round(closest_spline_t[0],3)}\nCoverage:{np.round(self.spline_coverage,3)}")
-        # else:
-        #     self.spline_coverage = closest_spline_t[0]-self.spline_start
-        #     print(f"B)Spline Start:{np.round(self.spline_start,3)}\nClosest Spline:{np.round(closest_spline_t[0],3)}\nCoverage:{np.round(self.spline_coverage,3)}")
-            
         if self.spline_start > closest_spline_t[0]+1:
-            # backwards
-            pass
+            
+
+            # self.spline_coverage = abs(self.spline_start-closest_spline_t[0]) + self.spline_offset
+            # if abs(current_state[2]-path_yaw) > math.pi*0.8:
+            #     self.spline_coverage = -1*self.spline_coverage
+            self.spline_coverage = closest_spline_t[0]-self.spline_start + self.spline_offset
+
+
+            print(f"A)Spline Start:{np.round(self.spline_start,3)}\nClosest Spline:{np.round(closest_spline_t[0],3)}\nCoverage:{np.round(self.spline_coverage,3)}")
         else:
-            # forwards
-            pass
+            if math.isclose(closest_spline_t[0],self.track_length,abs_tol=1) and not self.cross_over:
+                self.spline_offset = (self.track_length-self.spline_start)
+                self.spline_start = 0
+                self.cross_over = True
+
+            self.spline_coverage = closest_spline_t[0]-self.spline_start + self.spline_offset
+            print(f"B)Spline Start:{np.round(self.spline_start,3)}\nClosest Spline:{np.round(closest_spline_t[0],3)}\nCoverage:{np.round(self.spline_coverage,3)}")
+            
 
         if current_state[3]<0.1:
             reward=-1
