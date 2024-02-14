@@ -411,15 +411,24 @@ class CoreCarEnv():
             self.spline_coverage = closest_spline_t[0]-self.spline_start + self.spline_offset
 
 
-            print(f"A)Spline Start:{np.round(self.spline_start,3)}\nClosest Spline:{np.round(closest_spline_t[0],3)}\nCoverage:{np.round(self.spline_coverage,3)}")
+            # print(f"A)Spline Start:{np.round(self.spline_start,3)}\nClosest Spline:{np.round(closest_spline_t[0],3)}\nCoverage:{np.round(self.spline_coverage,3)}")
         else:
-            if math.isclose(closest_spline_t[0],self.track_length,abs_tol=1) and not self.cross_over:
-                self.spline_offset = (self.track_length-self.spline_start)
-                self.spline_start = 0
-                self.cross_over = True
+            if math.isclose(closest_spline_t[0],self.track_length,abs_tol=1):
+                # print("Close to End")
+                if not self.cross_over:
+                    # print("Cross Over")
+                    self.spline_offset = (self.track_length-self.spline_start)
+                    self.spline_start = 0
+                    self.cross_over = True
 
-            self.spline_coverage = closest_spline_t[0]-self.spline_start + self.spline_offset
-            print(f"B)Spline Start:{np.round(self.spline_start,3)}\nClosest Spline:{np.round(closest_spline_t[0],3)}\nCoverage:{np.round(self.spline_coverage,3)}")
+            if math.isclose(closest_spline_t[0],self.track_length,abs_tol=1):
+                self.spline_coverage = self.spline_offset
+            else:
+                self.spline_coverage = closest_spline_t[0] -self.spline_start + self.spline_offset
+
+
+            
+            # print(f"B)Spline Start:{np.round(self.spline_start,3)}\nClosest Spline:{np.round(closest_spline_t[0],3)}\nCoverage:{np.round(self.spline_coverage,3)}")
             
 
         if current_state[3]<0.1:
@@ -431,7 +440,7 @@ class CoreCarEnv():
                 done = True
 
         elif self.spline_coverage < -4:
-            print(f"Off-Track. Covered:{self.spline_coverage}/{self.track_length}")
+            print(f"Backward. Covered:{self.spline_coverage}/{self.track_length}")
             reward = -10
             done = True
         else:
