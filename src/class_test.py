@@ -235,8 +235,8 @@ class CoreCarEnv():
         self.cross_over = False
         # random_reset = rospy.get_param("random_reset",False)
         choice = np.random.uniform(0,1)
-        if choice<eps:
-            frac_start = 0.9
+        if choice>-1:
+            frac_start = 0
             frac_end = 1
             # rand_point = np.random.randint(0,int(self.global_path.shape[0]*frac))
             start_idx = int(self.global_path.shape[0]*frac_start)
@@ -257,6 +257,7 @@ class CoreCarEnv():
             dy_dt = self.y_spline(spline_t_dash,1)
 
             yaw = math.atan2(dy_dt,dx_dt)
+            yaw += np.random.uniform(-0.1,0.1)
 
 
             # print(f"Resetting to {x1},{y1},{yaw}")
@@ -341,7 +342,7 @@ class CoreCarEnv():
         ack_msg = AckermannDrive()
         action = self.action_map[idx]
         ack_msg.speed = action[0]
-        ack_msg.steering_angle = 0
+        ack_msg.steering_angle = action[1]
         self.drive_pub.publish(ack_msg)
         self.rate.sleep()
 
@@ -564,7 +565,7 @@ if __name__ == "__main__":
             done=False
             ref_list = np.array(core.global_path[:,0:2])
             max_time = 100
-            epochs = 10000
+            epochs = 30000
             max_epsilon = 1
             min_epsilon = 0.05
             decay_rate = (min_epsilon/max_epsilon)**(1/epochs)
@@ -626,7 +627,7 @@ if __name__ == "__main__":
             # core.car_spawner()
             call(["bash",macro_file])
             print("Macro Called")
-            time.sleep(1)
+            time.sleep(2)
 
             epoch_counter = 0
             last_valid_epoch = 1
@@ -653,7 +654,7 @@ if __name__ == "__main__":
                     try:
                         state = core.reset(epsilon)
                         
-                        rospy.sleep(1)
+                        rospy.sleep(2)
 
                         done=False
                         valid = True
@@ -707,7 +708,7 @@ if __name__ == "__main__":
                             invalid_flag = False
                             call(["bash",macro_file])
                             print("Macro Called")
-                            time.sleep(1)
+                            time.sleep(2)
                             continue
                         
                         trajectory[current_epoch] = np.array(current_trajectory)
