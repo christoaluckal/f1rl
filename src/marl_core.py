@@ -32,6 +32,7 @@ from geometry_msgs.msg import Point
 from tf.transformations import quaternion_from_euler
 import pickle
 import shutil
+import dill
 
 experience_buffer = deque(maxlen=int(1e6))
 BUFFER_SAMPLE = 256
@@ -619,6 +620,18 @@ if __name__ == "__main__":
             valids = [True]*num_cars
             coverages = [0]*num_cars
 
+            # if curr_epoch%10 == 0:
+            #     experiment_data = {
+            #         'epoch':curr_epoch,
+            #         'epsilon':epsilon,
+            #         'decay':decay,
+            #         'best_rewards':best_rewards,
+            #     }
+            #     dill.dump(experiment_data,open(f"{cores[0].exp_dir}/logs/experiment_data.pkl","wb"))
+            #     for i in range(num_cars):
+            #         dill.dump(cores[i],open(f"{cores[i].exp_dir}/logs/car_{i+1}_core.pkl","wb"))
+            eval_mode = False
+
             for i in range(num_cars):
                 print(f"Starting Car {cores[i].idx}")
                 state = cores[i].reset()
@@ -630,7 +643,7 @@ if __name__ == "__main__":
                 poses = []
                 current_trajectory = []
                 start = time.time()
-                eval_mode = False
+                
                 while not done:
                     if curr_epoch%50 == 0:
                         eval_mode = True
@@ -666,6 +679,11 @@ if __name__ == "__main__":
                     if cores[i].current_T == cores[i].T:
                         cores[i].trainer.train(cores[i].online_network,cores[i].target_network,experience_buffer,cores[i].discount_rate,BUFFER_SAMPLE,cores[i].lr,device)
                         cores[i].current_T = 0
+
+                        for k in range(num_cars):
+                            if k!=i:
+                                cores[k].trainer.train(cores[k].online_network,cores[k].target_network,experience_buffer,cores[k].discount_rate,BUFFER_SAMPLE,cores[k].lr,device)
+
                     else:
                         cores[i].current_T+=1
 
@@ -673,7 +691,7 @@ if __name__ == "__main__":
                 cores[i].episodes.append(curr_epoch)
                 cores[i].reward_list = np.append(cores[i].reward_list,core_ep_rewards[i])
 
-                cores[i].writer.add_scalar(f'Reward_{i+1}',core_ep_rewards[i],curr_epoch)
+                # cores[i].writer.add_scalar(f'Reward_{i+1}',core_ep_rewards[i],curr_epoch)
 
                 if cores[i].current_C == cores[i].C:
                     cores[i].target_network.load_state_dict(cores[i].online_network.state_dict())
@@ -690,6 +708,11 @@ if __name__ == "__main__":
                     torch.save(cores[i].online_network.state_dict(),f"{cores[i].exp_dir}/models/best_{cores[i].idx}.pt")
 
 
+            if False in valids:
+                print("Invalid")
+                call(["bash",macro_file])
+                print("Macro Called")
+                time.sleep(2)
 
             epsilon = epsilon*decay
             curr_epoch+=1
@@ -706,12 +729,14 @@ if __name__ == "__main__":
 
             writer.add_scalars('Spline Coverage',coverage_dict,curr_epoch)
 
-            if False in valids:
-                print("Invalid")
-                call(["bash",macro_file])
-                print("Macro Called")
-                time.sleep(2)
+            if eval_mode:
+                eval_dict = {}
+                for i in range(num_cars):
+                    eval_dict[f'car_{i+1}'] = core_ep_rewards[i]
 
+                writer.add_scalars('Eval Reward',eval_dict,curr_epoch)
+
+                
             
 
 
