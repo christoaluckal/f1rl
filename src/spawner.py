@@ -8,12 +8,14 @@ import time
 from tf.transformations import euler_from_quaternion, quaternion_from_euler
 import numpy as np
 
+num_cars = rospy.get_param('/num_cars', 2)
+
 def reset(resets):
 
     car_adder.publish()
     time.sleep(2)
 
-    for i in range(4):
+    for i in range(num_cars):
         print(f"Adding car_{i+1}")
         car_adder.publish(f"car_{i+1}")
         time.sleep(2)
@@ -27,7 +29,7 @@ if __name__ == '__main__':
     
     car_adder = rospy.Publisher('/addcar',String,queue_size=1)
     resets = {}
-    for i in range(4):
+    for i in range(num_cars):
         resets[i] = rospy.Publisher('/car_{}/reset'.format(i+1),Pose,queue_size=1)
     
 

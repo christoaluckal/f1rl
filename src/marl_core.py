@@ -155,12 +155,12 @@ class CoreCarEnv():
             if i!=len(archs)-1:
                 architecture_str+="_"
 
-        experiment_name = f"car_{idx}_arch_{architecture_str}"
+        self.experiment_name = f"car_{idx}_arch_{architecture_str}"
         
-        exp_dir = build_logging(experiment_name)
+        self.exp_dir = build_logging(self.experiment_name)
 
 
-        self.writer = SummaryWriter(os.path.join(exp_dir,'../tensorboard',experiment_name))
+        self.writer = SummaryWriter(os.path.join(self.exp_dir,'../tensorboard',self.experiment_name))
 
         n_states = self.get_state_count()
 
@@ -597,21 +597,29 @@ if __name__ == "__main__":
     print("Macro Called")
     time.sleep(2)
 
+    num_cars = 3
+
+    writer = SummaryWriter(os.path.join(rp.get_path('f1rl'),'src/runs/tensorboard'))
+
     while not rospy.is_shutdown():
         # try:
-        cores = [CoreCarEnv(i,architectures[0]) for i in range(1,5)]
+        cores = [CoreCarEnv(i,architectures[0]) for i in range(1,num_cars+1)]
         epochs = 30000
         curr_epoch = 1
         max_time = 100
         max_epsilon = 1
         min_epsilon = 0.05
         epsilon = 1
-        decay = (min_epsilon/max_epsilon)**(1/epochs)
+        decay = (min_epsilon/max_epsilon)**(num_cars/epochs)
+        best_rewards = [-1e6]*num_cars
         while curr_epoch < epochs:
-            core_ep_rewards = [0,0,0,0]
+            core_ep_rewards = [0]*num_cars
             cores[0].rviz_pub.publish(rviz_marker(cores[0].global_path,0))
-            valids = [True,True,True,True]
-            for i in range(4):
+
+            valids = [True]*num_cars
+            coverages = [0]*num_cars
+
+            for i in range(num_cars):
                 print(f"Starting Car {cores[i].idx}")
                 state = cores[i].reset()
                 done = False
@@ -634,7 +642,11 @@ if __name__ == "__main__":
                         reward -= 100
                         break
                     
-                    action,action_type = cores[i].policy(current_state,cores[i].online_network,cores[i].action_count,epsilon,device)
+                    if not eval_mode:
+                        action,action_type = cores[i].policy(current_state,cores[i].online_network,cores[i].action_count,epsilon,device)
+                    else:
+                        action,action_type = cores[i].policy(current_state,cores[i].online_network,cores[i].action_count,-1,device)
+                    
                     next_state,reward,done,valid,trajectory = cores[i].step(action)
                     experience_buffer.append((current_state,action,reward,next_state,done))
 
@@ -669,16 +681,38 @@ if __name__ == "__main__":
                 else:
                     cores[i].current_C+=1
 
+                coverages[i] = cores[i].spline_coverage
+
                 print(f"Car {cores[i].idx} Epoch:{curr_epoch} {greeds}/{exploits} \tReward:{core_ep_rewards[i]}\tEpsilon:{epsilon}\n")
             
+                if eval_mode and core_ep_rewards[i] > best_rewards[i]:
+                    best_rewards[i] = core_ep_rewards[i]
+                    torch.save(cores[i].online_network.state_dict(),f"{cores[i].exp_dir}/models/best_{cores[i].idx}.pt")
+
+
+
             epsilon = epsilon*decay
             curr_epoch+=1
 
-            if not (valids[0] and valids[1] and valids[2] and valids[3]):
-                print("Both Cars Invalid")
+            reward_dict = {}
+            for i in range(num_cars):
+                reward_dict[f'car_{i+1}'] = core_ep_rewards[i]
+
+            writer.add_scalars('Combined Reward',reward_dict,curr_epoch)
+
+            coverage_dict = {}
+            for i in range(num_cars):
+                coverage_dict[f'car_{i+1}'] = coverages[i]
+
+            writer.add_scalars('Spline Coverage',coverage_dict,curr_epoch)
+
+            if False in valids:
+                print("Invalid")
                 call(["bash",macro_file])
                 print("Macro Called")
                 time.sleep(2)
+
+            
 
 
         # except Exception as e:

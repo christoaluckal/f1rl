@@ -7,4 +7,6 @@ sleep 1
 xdotool mousemove 3300 257 click 1
 sleep 1
 rosrun f1rl spawner.py
+sleep 2
+echo "Done"
     

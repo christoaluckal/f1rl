@@ -1,4 +1,5 @@
 <launch>
 <rosparam command="load" file="$(find f1rl)/params/core.yaml"/>
 <node name="car_core" pkg="f1rl" type="marl_core.py" output="screen" />
+<param name="num_cars" type="int" value="3"/>
 </launch>
