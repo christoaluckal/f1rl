@@ -8,7 +8,7 @@ import time
 from tf.transformations import euler_from_quaternion, quaternion_from_euler
 import numpy as np
 
-num_cars = rospy.get_param('/num_cars', 2)
+num_cars = rospy.get_param('/num_cars', 3)
 
 def reset(resets):
 
