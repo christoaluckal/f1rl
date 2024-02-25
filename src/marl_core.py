@@ -504,8 +504,10 @@ class CoreCarEnv():
 
         return state,reward,done,valid,[current_state[0],current_state[1]]
     
-    def run_episode(self,epoch_num,epsilon,last_best_eval,eval_mode=False):
+    def run_episode(self,epoch_num,epsilon,last_best_eval,eval_mode=False,delay=0):
+        time.sleep(delay)
         init_state = self.reset()
+        time.sleep(delay)
 
         state = init_state
         done = False
@@ -719,7 +721,8 @@ if __name__ == "__main__":
                     results = []
                     threads = []
                     for i in range(num_cars):
-                        threads.append(threading.Thread(target=cores[i].run_episode,args=(curr_epoch,epsilon,best_rewards[i],False)))
+                        random_delay = np.random.randint(3,7)
+                        threads.append(threading.Thread(target=cores[i].run_episode,args=(curr_epoch,epsilon,best_rewards[i],False,random_delay)))
                         threads[i].start()
                     
                     for i in range(num_cars):

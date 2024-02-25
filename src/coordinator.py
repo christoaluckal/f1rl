@@ -40,7 +40,7 @@ class Coordinator:
             self.halt_flag = True
 
     def done_callback(self, msg, car_id):
-        self.dones[car_id] = msg.data
+        self.dones[car_id-1] = msg.data
 
     
 
@@ -68,10 +68,14 @@ class Coordinator:
                         can_go_msg = Bool()
                         can_go_msg.data = True
                         self.can_go_dict[f"car_{i+1}"].publish(can_go_msg)
+                        self.can_go_dict[f"car_{i+1}"].publish(can_go_msg)
 
                     while not all(self.dones):
-                        # rospy.loginfo("Waiting for cars to finish")
                         pass
+
+                    self.dones = [False]*self.num_cars
+                    self.epsilon *= self.decay
+                    current_epoch += 1
 
                     
 

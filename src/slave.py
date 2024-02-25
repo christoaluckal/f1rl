@@ -28,6 +28,9 @@ from visualization_msgs.msg import Marker
 from geometry_msgs.msg import Point
 from tf.transformations import quaternion_from_euler
 from std_msgs.msg import String,Float32MultiArray
+import sys
+
+cidx = int(sys.argv[1])
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -107,14 +110,16 @@ class CoreCarEnv():
         go_topic = f'/car_{idx}/go'
         done_topic = f'/car_{idx}/done'
         run_settings = '/run_settings'
+        car_adder = '/addcar'
 
         self.drive_pub = rospy.Publisher(drive_topic, AckermannDrive, queue_size=1)
         self.rviz_pub = rospy.Publisher('/visualization_marker',Marker,queue_size=1)
-        self.reset_pub = rospy.Publisher(reset_topic,Pose,queue_size=1)
+        self.reset_pub = rospy.Publisher(reset_topic,Pose,queue_size=3)
         self.halt_pub = rospy.Publisher(halting_topic,Bool,queue_size=1)
         self.go_sub = rospy.Subscriber(go_topic,Bool,self.go_callback)
         self.run_settings_sub = rospy.Subscriber(run_settings,Float32MultiArray,self.update_settings)
         self.done_pub = rospy.Publisher(done_topic,Bool,queue_size=1)
+        self.addcar_pub = rospy.Publisher(car_adder,String,queue_size=1)
 
         self.current_settings = None
         self.requested_reset = False
@@ -317,8 +322,8 @@ class CoreCarEnv():
         pose.orientation.w = quat[3]
 
         self.reset_pub.publish(pose)
-        # self.rate.sleep()
-        time.sleep(5)
+
+        rospy.Rate(1/5).sleep()
         counter+=1
 
         current_state = self.vehicle_state.get_state()[0]
@@ -510,8 +515,19 @@ class CoreCarEnv():
         return state,reward,done,valid,[current_state[0],current_state[1]]
     
     def run_episode(self,epoch_num,epsilon,eval_mode=False):
-        # init_state = self.reset()
-        init_state = [0]*self.get_state_count()
+        while True:
+            init_state = self.reset()
+            try:
+                rospy.wait_for_message(f'/car_{self.idx}/odom',Odometry,timeout=1)
+                print(f"Car {self.idx} Odom Received")
+                break
+            except:
+                car_name = f'car_{self.idx}'
+                s = String()
+                s.data = car_name
+                self.addcar_pub.publish(s)
+                continue
+
         state = init_state
         done = False
         valid = True
@@ -525,7 +541,7 @@ class CoreCarEnv():
         current_experience = []
 
         while not done:
-            print(f"Car {self.idx} T:{self.timesteps}")
+            # rospy.loginfo(f"Car {self.idx} T:{self.timesteps}")
             if eval_mode:
                 action,action_type = self.policy(state,self.online_network,self.action_count,-1,device)
             else:
@@ -585,8 +601,7 @@ class CoreCarEnv():
             
 
 if __name__ == "__main__":
-    rospy.init_node('slave_2', anonymous=True)
-    idx = 2
+    rospy.init_node(f'slave_{cidx}', anonymous=True)
     archs = [128,128]
-    car = CoreCarEnv(idx,archs)
+    car = CoreCarEnv(cidx,archs)
     car.run()
