@@ -5,4 +5,6 @@
 <node name="slave_2" pkg="f1rl" type="slave_2.py" output="screen" /> -->
 <node name="slave_1" args="1" pkg="f1rl" type="slave.py" output="screen" />
 <node name="slave_2" args="2" pkg="f1rl" type="slave.py" output="screen" />
+<node name="slave_3" args="3" pkg="f1rl" type="slave.py" output="screen" />
+<!-- <node name="slave_4" args="4" pkg="f1rl" type="slave.py" output="screen" /> -->
 </launch>

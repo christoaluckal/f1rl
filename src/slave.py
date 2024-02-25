@@ -30,10 +30,7 @@ from tf.transformations import quaternion_from_euler
 from std_msgs.msg import String,Float32MultiArray
 import sys
 
-cidx = int(sys.argv[1])
 
-
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 def distance_to_spline(t,current_x,current_y,x_spline,y_spline):
     spline_x, spline_y = x_spline(t), y_spline(t)
@@ -279,7 +276,7 @@ class CoreCarEnv():
         # random_reset = rospy.get_param("random_reset",False)
         choice = np.random.uniform(0,1)
         if choice>-1:
-            frac_start = 0
+            frac_start = 0.9
             frac_end = 1
             # rand_point = np.random.randint(0,int(self.global_path.shape[0]*frac))
             start_idx = int(self.global_path.shape[0]*frac_start)
@@ -323,7 +320,7 @@ class CoreCarEnv():
 
         self.reset_pub.publish(pose)
 
-        rospy.Rate(1/5).sleep()
+        rospy.Rate(1).sleep()
         counter+=1
 
         current_state = self.vehicle_state.get_state()[0]
@@ -387,8 +384,8 @@ class CoreCarEnv():
         action = self.action_map[idx]
 
 
-        ack_msg.speed = action[0]
-        ack_msg.steering_angle = action[1]
+        ack_msg.speed = 2
+        ack_msg.steering_angle = 0
 
         self.drive_pub.publish(ack_msg)
         self.rate.sleep()
@@ -518,7 +515,7 @@ class CoreCarEnv():
         while True:
             init_state = self.reset()
             try:
-                rospy.wait_for_message(f'/car_{self.idx}/odom',Odometry,timeout=1)
+                rospy.wait_for_message(f'/car_{self.idx}/odom',Odometry,timeout=3)
                 print(f"Car {self.idx} Odom Received")
                 break
             except:
@@ -586,7 +583,7 @@ class CoreCarEnv():
 
             epoch,epsilon = self.current_settings[0],self.current_settings[1]
 
-            print(f"Car:{self.idx} E:{epoch} Eps:{epsilon} Eval:{eval_mode}")
+            print(f"Car:{self.idx} Epoch:{epoch} Eps:{epsilon} Eval:{eval_mode}")
 
             self.can_go = False
 
@@ -601,6 +598,8 @@ class CoreCarEnv():
             
 
 if __name__ == "__main__":
+    cidx = int(sys.argv[1])
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     rospy.init_node(f'slave_{cidx}', anonymous=True)
     archs = [128,128]
     car = CoreCarEnv(cidx,archs)

@@ -1,10 +1,18 @@
 #!/usr/bin/env python3
 import rospy
 from std_msgs.msg import Bool,Float32MultiArray
+import os
+import rospkg
+import rosparam
+from slave import rviz_marker
+from visualization_msgs.msg import Marker
+rp = rospkg.RosPack()
 
 class Coordinator:
     def __init__(self) -> None:
-        self.num_cars = 2
+        self.num_cars = 3
+
+        self.marker_pub = rospy.Publisher("/visualization_marker", Marker, queue_size=1)
 
         for i in range(self.num_cars):
             # rospy.Subscriber(f"/car_{i+1}/halt", Bool, self.halt_callback, callback_args=i)
@@ -28,11 +36,20 @@ class Coordinator:
 
         self.start_listener = rospy.Subscriber("/start", Bool, self.start_callback)
 
+        self.start_flag = False
+
         self.dones = [False]*self.num_cars
+
+        import pathgen_ds as pathgen
+        track_file = os.path.join(rp.get_path('f1rl'),rosparam.get_param("track_file"))
+        x_idx = 0
+        y_idx = 1
+        scale = 0.25
+        self.global_path,self.track_length,self.x_spline,self.y_spline = pathgen.get_scaled_spline_path(track_file,x_idx,y_idx,scale)
 
     def start_callback(self, msg):
         if msg.data:
-            self.run()
+            self.start_flag = True
 
     
     def halt_callback(self, msg):
@@ -50,6 +67,12 @@ class Coordinator:
             try:
                 if self.halt_flag:
                     print("Halt flag is true")
+
+                if not self.start_flag:
+                    continue
+
+                m = rviz_marker(self.global_path,0)
+                self.marker_pub.publish(m)
 
                 current_epoch = 1
                 while current_epoch < self.epochs:
