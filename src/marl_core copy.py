@@ -33,7 +33,6 @@ from tf.transformations import quaternion_from_euler
 import pickle
 import shutil
 import signal
-import threading
 
 experience_buffer = deque(maxlen=int(1e6))
 BUFFER_SAMPLE = 256
@@ -184,9 +183,6 @@ class CoreCarEnv():
         self.current_C = 0
         self.C = 20
 
-        self.current_T = 0
-        self.T = 100
-
     def set_networks(self,global_net):
         self.online_network.load_state_dict(global_net.state_dict())
         self.target_network.load_state_dict(global_net.state_dict())
@@ -313,7 +309,7 @@ class CoreCarEnv():
 
         self.reset_pub.publish(pose)
         # self.rate.sleep()
-        time.sleep(5)
+        time.sleep(2)
         counter+=1
 
         current_state = self.vehicle_state.get_state()[0]
@@ -372,14 +368,11 @@ class CoreCarEnv():
         prev_state = self.vehicle_state.get_state()[0]
         prev_spline_t = self.closest_spline_param(distance_to_spline,prev_state[0],prev_state[1],self.x_spline,self.y_spline)
 
-        
+
         ack_msg = AckermannDrive()
         action = self.action_map[idx]
-
-
         ack_msg.speed = action[0]
         ack_msg.steering_angle = action[1]
-
         self.drive_pub.publish(ack_msg)
         self.rate.sleep()
 
@@ -503,70 +496,6 @@ class CoreCarEnv():
                     reward-=5
 
         return state,reward,done,valid,[current_state[0],current_state[1]]
-    
-    def run_episode(self,epoch_num,epsilon,last_best_eval,eval_mode=False):
-        init_state = self.reset()
-
-        state = init_state
-        done = False
-        valid = True
-        ep_reward = 0
-        greeds = 0
-        exploits = 0
-        coverage = 0
-        current_trajectory = []
-        start = time.time()
-
-        while not done:
-            print(f"Car {self.idx} T:{self.timesteps}")
-            if eval_mode:
-                action,action_type = self.policy(state,self.online_network,self.action_count,-1,device)
-            else:
-                action,action_type = self.policy(state,self.online_network,self.action_count,epsilon,device)
-            next_state,reward,done,valid,trajectory = self.step(action)
-            experience_buffer.append((state,action,reward,next_state,done))
-
-            if done and not valid:
-                break
-
-            if action_type == 1:
-                greeds+=1
-            else:
-                exploits+=1
-
-            ep_reward+=reward
-            state = next_state
-            current_trajectory.append(trajectory)
-
-            if time.time()-start > 100:
-                done = True
-                reward -= 100
-                break
-
-            if self.current_T == self.T:
-                self.online_network = self.trainer.train(self.online_network,self.target_network,experience_buffer,self.discount_rate,BUFFER_SAMPLE,self.lr,device)
-                self.current_T = 0
-            else:
-                self.current_T+=1
-
-        if epoch_num == self.C:
-            self.target_network.load_state_dict(self.online_network.state_dict())
-            self.current_C = 0
-
-        
-        results = {
-            'idx':self.idx,
-            'greeds':greeds,
-            'exploits':exploits,
-            'reward':ep_reward,
-            'trajectory':current_trajectory,
-            'coverage':coverage,
-            'eval': ep_reward if (eval_mode and ep_reward > last_best_eval) else None
-        }
-            
-
-        return results
-
         
 def build_logging(experiment_name):
     root_dir = os.path.join(rp.get_path('f1rl'),'src')
@@ -658,8 +587,6 @@ def shutdown_hook():
         rospy.sleep(1)
     rospy.signal_shutdown("Shutting Down")
 
-import multiprocessing as mp
-
 if __name__ == "__main__":
     rospy.init_node('car_core',anonymous=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -705,42 +632,154 @@ if __name__ == "__main__":
             update_T = 1000
 
             while curr_epoch < epochs:
-                start = timer()
-                print(f"Epoch {curr_epoch}/{epochs}")
-                epsilon = max_epsilon*(decay**curr_epoch)
-                print(f"Epsilon:{epsilon}")
-
+                
                 try:
                     signal.signal(signal.SIGALRM,timeout_hander)
-                    signal.alarm(num_cars*max_time+50)
-                    
-                    
-                    # use threading to run the episodes in parallel
-                    results = []
-                    threads = []
-                    for i in range(num_cars):
-                        threads.append(threading.Thread(target=cores[i].run_episode,args=(curr_epoch,epsilon,best_rewards[i],False)))
-                        threads[i].start()
-                    
-                    for i in range(num_cars):
-                        threads[i].join()
-                        # results.append(cores[i].run_episode(curr_epoch,epsilon,best_rewards[i],False))
+                    signal.alarm(int(num_cars*max_time+50))
 
+                    core_ep_rewards = [0]*num_cars
+                    cores[0].rviz_pub.publish(rviz_marker(cores[0].global_path,0))
+
+                    valids = [True]*num_cars
+                    coverages = [0]*num_cars
+
+                    # if curr_epoch%10 == 0:
+                    #     experiment_data = {
+                    #         'epoch':curr_epoch,
+                    #         'epsilon':epsilon,
+                    #         'decay':decay,
+                    #         'best_rewards':best_rewards,
+                    #     }
+                    #     dill.dump(experiment_data,open(f"{cores[0].exp_dir}/logs/experiment_data.pkl","wb"))
+                    #     for i in range(num_cars):
+                    #         dill.dump(cores[i],open(f"{cores[i].exp_dir}/logs/car_{i+1}_core.pkl","wb"))
+                    eval_mode = False
+
+                    for i in range(num_cars):
+                        print(f"Starting Car {cores[i].idx}")
+                        state = cores[i].reset()
+                        done = False
+                        valid = True
+                        ep_reward = 0
+                        greeds = 0
+                        exploits = 0
+                        poses = []
+                        current_trajectory = []
+                        start = time.time()
+                        
+                        while not done:
+                            if curr_epoch%50 == 0:
+                                eval_mode = True
+                            else:
+                                eval_mode = False
+                            current_state = state
+                            if time.time()-start > max_time:
+                                done = True
+                                reward -= 100
+                                break
+                            
+                            if not eval_mode:
+                                action,action_type = cores[i].policy(current_state,cores[i].online_network,cores[i].action_count,epsilon,device)
+                            else:
+                                action,action_type = cores[i].policy(current_state,cores[i].online_network,cores[i].action_count,-1,device)
+                            
+                            next_state,reward,done,valid,trajectory = cores[i].step(action)
+                            experience_buffer.append((current_state,action,reward,next_state,done))
+
+                            if done and not valid:
+                                valids[i] = False
+                                break
+
+                            if action_type == 1:
+                                greeds+=1
+                            else:
+                                exploits+=1
+
+                            core_ep_rewards[i]+=reward
+
+                            state = next_state
+
+                            if curr_T == update_T:
+                                # cores[i].trainer.train(global_network,cores[i].target_network,experience_buffer,cores[i].discount_rate,BUFFER_SAMPLE,cores[i].lr,device)
+                                curr_T = 0
+
+                                for k in range(num_cars):
+                                    cores[k].trainer.train(global_network,cores[k].target_network,experience_buffer,cores[k].discount_rate,BUFFER_SAMPLE,cores[k].lr,device)
+
+                            else:
+                                curr_T+=1
+
+
+                        cores[i].episodes.append(curr_epoch)
+                        cores[i].reward_list = np.append(cores[i].reward_list,core_ep_rewards[i])
+
+                        # cores[i].writer.add_scalar(f'Reward_{i+1}',core_ep_rewards[i],curr_epoch)
+
+                        if cores[i].current_C == cores[i].C:
+                            cores[i].target_network.load_state_dict(global_network.state_dict())
+                            cores[i].current_C = 0
+                        else:
+                            cores[i].current_C+=1
+
+                        coverages[i] = cores[i].spline_coverage
+
+                        print(f"Car {cores[i].idx} Epoch:{curr_epoch} {greeds}/{exploits} \tReward:{core_ep_rewards[i]}\tEpsilon:{epsilon}\n")
+                    
+                        if eval_mode and core_ep_rewards[i] > best_rewards[i]:
+                            best_rewards[i] = core_ep_rewards[i]
+                            torch.save(cores[i].online_network.state_dict(),f"{cores[i].exp_dir}/models/best_{cores[i].idx}.pt")
+
+
+                    if False in valids:
+                        print("Invalid")
+                        call(["bash",macro_file])
+                        print("Macro Called")
+                        time.sleep(2)
+                        continue
+
+                    
+                    reward_dict = {}
+                    for i in range(num_cars):
+                        reward_dict[f'car_{i+1}'] = core_ep_rewards[i]
+
+                    writer.add_scalars('Combined Reward',reward_dict,curr_epoch)
+
+                    coverage_dict = {}
+                    for i in range(num_cars):
+                        coverage_dict[f'car_{i+1}'] = coverages[i]
+
+                    writer.add_scalars('Spline Coverage',coverage_dict,curr_epoch)
+
+                    if eval_mode:
+                        eval_dict = {}
+                        for i in range(num_cars):
+                            eval_dict[f'car_{i+1}'] = core_ep_rewards[i]
+
+                        writer.add_scalars('Eval Reward',eval_dict,curr_epoch)
+
+                    epsilon = epsilon*decay
                     curr_epoch+=1
-                    epsilon*=decay
 
-                except CustomTimeout:
-                    print("Timeout")
+                except CustomTimeout as e:
+                    print(e)
                     call(["bash",macro_file])
+                    print("Macro Called")
                     time.sleep(2)
+                    continue
 
                 finally:
                     signal.alarm(0)
-
-
-                
                     
     except rospy.ROSInterruptException:
         print("Shutting Down")        
+
+
+        # except Exception as e:
+        #     print(e)
+        #     continue
+            
+
+
+
 
     
