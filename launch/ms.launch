@@ -1,0 +1,6 @@
+<launch>
+<rosparam command="load" file="$(find f1rl)/params/core.yaml"/>
+<node name="coordinator" pkg="f1rl" type="coordinator.py" output="screen" />
+<node name="slave_1" pkg="f1rl" type="slave_1.py" output="screen" />
+<node name="slave_2" pkg="f1rl" type="slave_2.py" output="screen" />
+</launch>

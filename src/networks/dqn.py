@@ -10,7 +10,7 @@ class NaiveDQN():
     def __init__(self) -> None:
         pass
 
-    def train(self,online_network, target_network, memory, discount_rate,BUFFER_SAMPLE, rate,device):
+    def train(self, online_network, target_network, memory, discount_rate,BUFFER_SAMPLE, rate,device):
         if len(memory) >= BUFFER_SAMPLE:
 
             chosen_experiences = random.sample(memory,BUFFER_SAMPLE)
