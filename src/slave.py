@@ -108,6 +108,7 @@ class CoreCarEnv():
         done_topic = f'/car_{idx}/done'
         run_settings = '/run_settings'
         car_adder = '/addcar'
+        reward_topic = f'/car_{idx}/reward'
 
         self.drive_pub = rospy.Publisher(drive_topic, AckermannDrive, queue_size=1)
         self.rviz_pub = rospy.Publisher('/visualization_marker',Marker,queue_size=1)
@@ -117,6 +118,7 @@ class CoreCarEnv():
         self.run_settings_sub = rospy.Subscriber(run_settings,Float32MultiArray,self.update_settings)
         self.done_pub = rospy.Publisher(done_topic,Bool,queue_size=1)
         self.addcar_pub = rospy.Publisher(car_adder,String,queue_size=1)
+        self.reward_pub = rospy.Publisher(reward_topic,Float32MultiArray,queue_size=1)
 
         self.current_settings = None
         self.requested_reset = False
@@ -384,8 +386,8 @@ class CoreCarEnv():
         action = self.action_map[idx]
 
 
-        ack_msg.speed = 2
-        ack_msg.steering_angle = 0
+        ack_msg.speed = action[0]
+        ack_msg.steering_angle = action[1]
 
         self.drive_pub.publish(ack_msg)
         self.rate.sleep()
@@ -563,21 +565,26 @@ class CoreCarEnv():
                 reward -= 100
                 break
 
-        if done and not valid:
+        if True:
             self.requested_reset = True
             self.halt_pub.publish(Bool(True))
+
+        return ep_reward*1.0,greeds*1.0,exploits*1.0, self.spline_coverage*1.0
 
     def run(self):
         rospy.loginfo(f"Car {self.idx} Running")
         while not rospy.is_shutdown():
+
             if self.requested_reset:
                 continue
-            
+
             if not self.can_go:
                 continue
-            
+
             if self.current_settings is None:
                 continue
+
+            rospy.loginfo(f"Car {self.idx} Running After Checks")
             
             eval_mode = True if self.current_settings[-1] == 1 else False
 
@@ -587,9 +594,14 @@ class CoreCarEnv():
 
             self.can_go = False
 
-            self.run_episode(epoch,epsilon,eval_mode)
+            rew = self.run_episode(epoch,epsilon,eval_mode)
 
             self.done_pub.publish(Bool(True))
+
+            msg = Float32MultiArray()
+            msg.data = [rew[0],rew[1],rew[2],rew[3]]
+            print("R:",msg.data)
+            self.reward_pub.publish(msg)
 
 
         # self.run_episode(epoch,epsilon,eval_mode)
