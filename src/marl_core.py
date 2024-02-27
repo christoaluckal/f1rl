@@ -33,6 +33,7 @@ from tf.transformations import quaternion_from_euler
 import pickle
 import shutil
 import dill
+import signal
 
 experience_buffer = deque(maxlen=int(1e6))
 BUFFER_SAMPLE = 256
@@ -100,15 +101,38 @@ def rviz_marker(msg,msg_type):
             point.z = 0
             marker.points.append(point)
 
+    elif msg_type == 3:
+        marker = Marker()
+        marker.header.frame_id = "map"
+        marker.header.stamp = rospy.Time.now()
+        marker.ns = "goal"
+        marker.id = 0
+        marker.type = Marker.SPHERE
+        marker.action = Marker.ADD
+        marker.pose.orientation.w = 1.0
+        marker.scale.x = 1
+        marker.scale.y = 1
+        marker.scale.z = 1
+        marker.color.b = 1.0
+        marker.color.a = 1.0
+        point = Point()
+        point.x = msg[0]
+        point.y = msg[1]
+        point.z = 0
+        marker.points.append(point)
+
     return marker
 
 class CoreCarEnv():
-    def __init__(self,idx,archs) -> None:
+    def __init__(self,idx,archs,start_goal) -> None:
         
         self.idx = idx
         drive_topic = f'/car_{idx}/command'
         odom_topic = f'/car_{idx}/odom'
         reset_topic = f'/car_{idx}/reset'
+
+        self.start = start_goal[0]
+        self.end = start_goal[1]
 
         self.drive_pub = rospy.Publisher(drive_topic, AckermannDrive, queue_size=1)
         self.rviz_pub = rospy.Publisher('/visualization_marker',Marker,queue_size=1)
@@ -123,6 +147,16 @@ class CoreCarEnv():
         y_idx = 1
         scale = 0.25
         self.global_path,self.track_length,self.x_spline,self.y_spline = pathgen.get_scaled_spline_path(csv_f,x_idx,y_idx,scale)
+
+        start_idx = int(self.global_path.shape[0]*self.start)
+        end_idx = int(self.global_path.shape[0]*self.end)
+
+        self.start_p = self.global_path[start_idx]
+        self.goal_p = self.global_path[end_idx]
+
+        self.goal_dist = self.euclidean_dist(self.start_p,self.goal_p)
+
+        print(f"Car {self.idx} Start:{self.start_p}\nEnd:{self.goal_p}\nGoal Dist:{self.goal_dist}")
 
 
         speeds = [2,3,4]
@@ -184,11 +218,10 @@ class CoreCarEnv():
 
         self.C = 20
         self.T = 20
-        
+
         self.current_C = 0
         self.current_T = 0
-        
-        
+
 
     class VehicleState:
         def __init__(self,topic):
@@ -268,12 +301,13 @@ class CoreCarEnv():
         # random_reset = rospy.get_param("random_reset",False)
         choice = np.random.uniform(0,1)
         if choice>-1:
-            frac_start = 0
-            frac_end = 1
+            frac_start = self.start
+            frac_end = self.end
             # rand_point = np.random.randint(0,int(self.global_path.shape[0]*frac))
             start_idx = int(self.global_path.shape[0]*frac_start)
             end_idx = int(self.global_path.shape[0]*frac_end)
-            rand_point = np.random.randint(start_idx,end_idx)
+            # rand_point = np.random.randint(start_idx,end_idx)
+            rand_point = start_idx
             next_point = rand_point+5 if rand_point<self.global_path.shape[0]-5 else 0
 
             x1,y1 = self.global_path[rand_point,0],self.global_path[rand_point,1]
@@ -420,7 +454,6 @@ class CoreCarEnv():
         # marker = rviz_marker(p,2)
         # self.rviz_pub.publish(marker)
 
-
         spline_dist = self.euclidean_dist(current_state[0:2],closest_spline_point)
 
 
@@ -474,7 +507,7 @@ class CoreCarEnv():
                 done = True
 
         elif self.spline_coverage < -4:
-            print(f"Backward. Covered:{self.spline_coverage}/{self.track_length}")
+            print(f"Backward. Covered:{self.spline_coverage}/{self.goal_dist}")
             reward = -10
             done = True
         else:
@@ -482,11 +515,11 @@ class CoreCarEnv():
             reward += move_dist*(current_state[3])*5
 
             if spline_dist>1:
-                print(f"Car {self.idx} Off-Track. Covered:{self.spline_coverage}/{self.track_length}")
+                print(f"Car {self.idx} Off-Track. Covered:{self.spline_coverage}/{self.goal_dist}")
                 done=True
                 reward=-10
 
-            if self.spline_coverage > self.track_length*0.9 and len(self.trajectory)>100:
+            if self.spline_coverage > self.goal_dist*0.9 and len(self.trajectory)>100:
                 print("Track Covered")
                 done=True
                 reward+=10
@@ -577,7 +610,11 @@ def create_files(experiment_path):
 
     return [reward_path,best_reward_path,trajectory_path]
 
+def CustomTimeout(Exception):
+    pass
 
+def timeout_handler(signum, frame):
+    raise CustomTimeout
 
 def shutdown_hook():
     print("Shutting Down")
@@ -592,157 +629,165 @@ if __name__ == "__main__":
 
     architectures = [[128,128],[256,256],[512,512],[1024,1024]]
     is_lab = rospy.get_param("is_lab",False)
-    macro_file = os.path.join(rp.get_path('f1rl'),'src/macro_marl.sh' if (not is_lab) else 'src/macro_lab.sh')
+    macro_file = os.path.join(rp.get_path('f1rl'),'src/macro_marl.sh' if (not is_lab) else 'src/macro_marl_lab.sh')
 
     call(["bash",macro_file])
     print("Macro Called")
     time.sleep(2)
 
-    num_cars = 3
+    num_cars = rospy.get_param('num_cars',3)
 
     writer = SummaryWriter(os.path.join(rp.get_path('f1rl'),'src/runs/tensorboard'))
 
     while not rospy.is_shutdown():
         # try:
-        cores = [CoreCarEnv(i,architectures[0]) for i in range(1,num_cars+1)]
-        epochs = 30000
+        # cores = [CoreCarEnv(i,architectures[0]) for i in range(1,num_cars+1)]
+        cores = [
+            # CoreCarEnv(1,architectures[0],(0.75,0.95)),
+            # CoreCarEnv(2,architectures[0],(0.15,0.4)),
+            # CoreCarEnv(3,architectures[0],(0.45,0.7)),
+            CoreCarEnv(1,architectures[0],(0.05,0.33)),
+            CoreCarEnv(2,architectures[0],(0.34,0.65)),
+            CoreCarEnv(3,architectures[0],(0.66,0.99))
+
+        ]
+        epochs = 10000
         curr_epoch = 1
         max_time = 100
         max_epsilon = 1
         min_epsilon = 0.05
         epsilon = 1
-        decay = (min_epsilon/max_epsilon)**(num_cars/epochs)
+        decay = (min_epsilon/max_epsilon)**(1/epochs)
         best_rewards = [-1e6]*num_cars
-        while curr_epoch < epochs:
-            core_ep_rewards = [0]*num_cars
-            cores[0].rviz_pub.publish(rviz_marker(cores[0].global_path,0))
-
-            valids = [True]*num_cars
-            coverages = [0]*num_cars
-
-            # if curr_epoch%10 == 0:
-            #     experiment_data = {
-            #         'epoch':curr_epoch,
-            #         'epsilon':epsilon,
-            #         'decay':decay,
-            #         'best_rewards':best_rewards,
-            #     }
-            #     dill.dump(experiment_data,open(f"{cores[0].exp_dir}/logs/experiment_data.pkl","wb"))
-            #     for i in range(num_cars):
-            #         dill.dump(cores[i],open(f"{cores[i].exp_dir}/logs/car_{i+1}_core.pkl","wb"))
-            eval_mode = False
-
-            for i in range(num_cars):
-                print(f"Starting Car {cores[i].idx}")
-                state = cores[i].reset()
-                done = False
-                valid = True
-                ep_reward = 0
-                greeds = 0
-                exploits = 0
-                poses = []
-                current_trajectory = []
-                start = time.time()
-                
-                while not done:
-                    if curr_epoch%50 == 0:
-                        eval_mode = True
-                    else:
-                        eval_mode = False
-                    current_state = state
-                    if time.time()-start > max_time:
-                        done = True
-                        reward -= 100
-                        break
-                    
-                    if not eval_mode:
-                        action,action_type = cores[i].policy(current_state,cores[i].online_network,cores[i].action_count,epsilon,device)
-                    else:
-                        action,action_type = cores[i].policy(current_state,cores[i].online_network,cores[i].action_count,-1,device)
-                    
-                    next_state,reward,done,valid,trajectory = cores[i].step(action)
-                    experience_buffer.append((current_state,action,reward,next_state,done))
-
-                    if done and not valid:
-                        valids[i] = False
-                        break
-
-                    if action_type == 0:
-                        greeds+=1
-                    else:
-                        exploits+=1
-
-                    core_ep_rewards[i]+=reward
-
-                    state = next_state
-
-                    if cores[i].current_T == cores[i].T:
-                        cores[i].trainer.train(cores[i].online_network,cores[i].target_network,experience_buffer,cores[i].discount_rate,BUFFER_SAMPLE,cores[i].lr,device)
-                        cores[i].current_T = 0
-
-                        for k in range(num_cars):
-                            if k!=i:
-                                cores[k].trainer.train(cores[k].online_network,cores[k].target_network,experience_buffer,cores[k].discount_rate,BUFFER_SAMPLE,cores[k].lr,device)
-
-                    else:
-                        cores[i].current_T+=1
 
 
-                cores[i].episodes.append(curr_epoch)
-                cores[i].reward_list = np.append(cores[i].reward_list,core_ep_rewards[i])
+        try:
+            while curr_epoch < epochs:
+                signal.signal(signal.SIGALRM, timeout_handler)
+                signal.alarm(int(num_cars*max_time+50))
+                core_ep_rewards = [0]*num_cars
+                cores[0].rviz_pub.publish(rviz_marker(cores[0].global_path,0))
 
-                # cores[i].writer.add_scalar(f'Reward_{i+1}',core_ep_rewards[i],curr_epoch)
+                valids = [True]*num_cars
+                coverages = [0]*num_cars
 
-                if cores[i].current_C == cores[i].C:
-                    cores[i].target_network.load_state_dict(cores[i].online_network.state_dict())
-                    cores[i].current_C = 0
-                else:
-                    cores[i].current_C+=1
+                eval_mode = False
 
-                coverages[i] = cores[i].spline_coverage
-
-                print(f"Car {cores[i].idx} Epoch:{curr_epoch} {greeds}/{exploits} \tReward:{core_ep_rewards[i]}\tEpsilon:{epsilon}\n")
-            
-                if eval_mode and core_ep_rewards[i] > best_rewards[i]:
-                    best_rewards[i] = core_ep_rewards[i]
-                    torch.save(cores[i].online_network.state_dict(),f"{cores[i].exp_dir}/models/best_{cores[i].idx}.pt")
-
-
-            if False in valids:
-                print("Invalid")
-                call(["bash",macro_file])
-                print("Macro Called")
-                time.sleep(2)
-
-            epsilon = epsilon*decay
-            curr_epoch+=1
-
-            reward_dict = {}
-            for i in range(num_cars):
-                reward_dict[f'car_{i+1}'] = core_ep_rewards[i]
-
-            writer.add_scalars('Combined Reward',reward_dict,curr_epoch)
-
-            coverage_dict = {}
-            for i in range(num_cars):
-                coverage_dict[f'car_{i+1}'] = coverages[i]
-
-            writer.add_scalars('Spline Coverage',coverage_dict,curr_epoch)
-
-            if eval_mode:
-                eval_dict = {}
                 for i in range(num_cars):
-                    eval_dict[f'car_{i+1}'] = core_ep_rewards[i]
+                    print(f"Starting Car {cores[i].idx}")
+                    state = cores[i].reset()
+                    done = False
+                    valid = True
+                    ep_reward = 0
+                    greeds = 0
+                    exploits = 0
+                    poses = []
+                    current_trajectory = []
+                    start = time.time()
+                    
+                    while not done:
 
-                writer.add_scalars('Eval Reward',eval_dict,curr_epoch)
+                        m = rviz_marker(cores[i].start_p,3)
+                        cores[i].rviz_pub.publish(m)
+                        m = rviz_marker(cores[i].goal_p,3)
+                        cores[i].rviz_pub.publish(m)
+
+                        if curr_epoch%25 == 0:
+                            eval_mode = True
+                        else:
+                            eval_mode = False
+                        current_state = state
+                        if time.time()-start > max_time:
+                            done = True
+                            reward -= 100
+                            break
+                        
+                        if not eval_mode:
+                            action,action_type = cores[i].policy(current_state,cores[i].online_network,cores[i].action_count,epsilon,device)
+                        else:
+                            action,action_type = cores[i].policy(current_state,cores[i].online_network,cores[i].action_count,-1,device)
+                        
+                        next_state,reward,done,valid,trajectory = cores[i].step(action)
+                        experience_buffer.append((current_state,action,reward,next_state,done))
+
+                        if done and not valid:
+                            valids[i] = False
+                            break
+
+                        if action_type == 0:
+                            greeds+=1
+                        else:
+                            exploits+=1
+
+                        core_ep_rewards[i]+=reward
+
+                        state = next_state
+
+                        if cores[i].current_T == cores[i].T:
+                            cores[i].trainer.train(cores[i].online_network,cores[i].target_network,experience_buffer,cores[i].discount_rate,BUFFER_SAMPLE,cores[i].lr,device)
+                            cores[i].current_T = 0
+                        else:
+                            cores[i].current_T+=1
+
+
+                    cores[i].episodes.append(curr_epoch)
+                    cores[i].reward_list = np.append(cores[i].reward_list,core_ep_rewards[i])
+
+                    # cores[i].writer.add_scalar(f'Reward_{i+1}',core_ep_rewards[i],curr_epoch)
+
+                    if cores[i].current_C == cores[i].C:
+                        cores[i].target_network.load_state_dict(cores[i].online_network.state_dict())
+                        cores[i].current_C = 0
+                    else:
+                        cores[i].current_C+=1
+
+                    coverages[i] = cores[i].spline_coverage/cores[i].goal_dist
+
+                    print(f"Car {cores[i].idx} Epoch:{curr_epoch} {greeds}/{exploits} \tReward:{core_ep_rewards[i]}\tEpsilon:{epsilon}\n")
+                
+                    if eval_mode and core_ep_rewards[i] > best_rewards[i]:
+                        best_rewards[i] = core_ep_rewards[i]
+                        torch.save(cores[i].online_network.state_dict(),f"{cores[i].exp_dir}/models/best_{cores[i].idx}.pt")
+
+
+                if False in valids:
+                    print("Invalid")
+                    call(["bash",macro_file])
+                    print("Macro Called")
+                    time.sleep(2)
 
                 
-            
+                reward_dict = {}
+                for i in range(num_cars):
+                    reward_dict[f'car_{i+1}'] = core_ep_rewards[i]
+
+                writer.add_scalars('Combined Reward',reward_dict,curr_epoch)
+
+                coverage_dict = {}
+                for i in range(num_cars):
+                    coverage_dict[f'car_{i+1}'] = coverages[i]
+
+                writer.add_scalars('Spline Coverage',coverage_dict,curr_epoch)
+
+                if eval_mode:
+                    eval_dict = {}
+                    for i in range(num_cars):
+                        eval_dict[f'car_{i+1}'] = core_ep_rewards[i]
+
+                    writer.add_scalars('Eval Reward',eval_dict,curr_epoch)
 
 
-        # except Exception as e:
-        #     print(e)
-        #     continue
+                epsilon = epsilon*decay
+                curr_epoch+=1
+        except CustomTimeout:
+            print("Timeout")
+            call(["bash",macro_file])
+            print("Macro Called")
+            time.sleep(2)
+            continue
+
+                
+
             
 
 
