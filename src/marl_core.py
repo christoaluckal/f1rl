@@ -154,7 +154,15 @@ class CoreCarEnv():
         self.start_p = self.global_path[start_idx]
         self.goal_p = self.global_path[end_idx]
 
-        self.goal_dist = self.euclidean_dist(self.start_p,self.goal_p)
+        self.goal_dist = 0
+        for i in range(start_idx,end_idx):
+            try:
+                p0 = self.global_path[i]
+                p1 = self.global_path[i+1]
+                dist = math.sqrt((p0[0]-p1[0])**2+(p0[1]-p1[1])**2)
+                self.goal_dist+=dist
+            except:
+                pass
 
         print(f"Car {self.idx} Start:{self.start_p}\nEnd:{self.goal_p}\nGoal Dist:{self.goal_dist}")
 
